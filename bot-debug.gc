@@ -1,0 +1,56 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+(define *bot-debug* #f)
+(define *bot-debug-proc* (the-as (pointer process) 0))
+
+(defun-debug kill-bot-debug ()
+  (if *bot-debug-proc*
+    (deactivate (ppointer->process *bot-debug-proc*))))
+
+(defun-debug bot-debug ((name string))
+ (let ((proc (process-by-ename name)))
+   (if (and proc (type? proc bot))
+      (let ((debug-proc
+             (process-spawn-function process (lambda :behavior process ((name string) (proc bot))
+                (let* ((bot proc)
+                      (task-ctrl (-> bot ai-ctrl))
+                      (course (-> bot course))
+                      (waypoint (-> bot waypoint))
+                      (spot (-> bot spot)))
+                  (loop
+                    (dotimes (_ 2) (format *stdcon* "~%"))
+                    (format *stdcon* "bot debug:~%")
+                    (format *stdcon* "~S:~%" name)
+                    (format *stdcon* "state ~A~%" (-> bot next-state name))
+                    (format *stdcon* "waypoint id:~D too-far ~A~%" (-> waypoint waypoint-id) (-> waypoint check-too-far))
+                    (format *stdcon* "task control: anchor id ~D~%~Tpool ~D tasks anchor id ~D~%" (-> task-ctrl anchor) (-> task-ctrl anchor unique-id) (-> task-ctrl pool tasks-length) (-> task-ctrl pool anchor unique-id))
+                    (format *stdcon* "spot: center x:~m y:~m z:~m w:~m~%" (-> spot center x) (-> spot center y) (-> spot center z) (-> spot center w))
+                    (suspend)))))))
+                  (set! *bot-debug-proc* debug-proc)
+            )
+            ;; (format #t "~S is not a valid bot!~%" name)
+      )))
+
+(defbehavior bot-print-debug bot ((name string))
+  (let ((task-ctrl (-> self ai-ctrl))
+        (course (-> self course))
+        (waypoint (-> self waypoint))
+        (spot (-> self spot)))
+    (loop
+      (dotimes (_ 2) (format *stdcon* "~%"))
+      (format *stdcon* "bot debug:~%")
+      (format *stdcon* "~A:~%" (-> self type))
+      (format *stdcon* "state ~A~%" (-> self next-state name))
+      (format *stdcon* "waypoint id:~D too-far ~A~%" (-> waypoint waypoint-id) (-> waypoint check-too-far))
+      (format *stdcon* "task control: anchor id ~D~%~Tpool ~D tasks anchor id ~D~%" (-> task-ctrl anchor) (-> task-ctrl anchor unique-id) (-> task-ctrl pool tasks-length) (-> task-ctrl pool anchor unique-id))
+      (format *stdcon* "spot: center x:~m y:~m z:~m w:~m~%" (-> spot center x) (-> spot center y) (-> spot center z) (-> spot center w))
+      (suspend)))
+  )
+
+(defun-debug start-bot-debug ((name string))
+  (if *bot-debug-proc*
+    (format #t "bot debug is already running!~%")
+    (bot-debug name)
+    )
+  )
