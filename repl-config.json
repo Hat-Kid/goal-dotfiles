@@ -1,0 +1,31 @@
+{
+    "jak1": {
+      "permissiveRedefinitions": true,
+      "asmFileSearchDirs": [
+        "goal_src/jak1",
+        "goal_src/user/hatkid"
+      ]
+    },
+    "jak2": {
+      "permissiveRedefinitions": true,
+      "asmFileSearchDirs": [
+        "goal_src/jak2",
+        "goal_src/user/hatkid"
+      ]
+    },
+    "jak3": {
+      "permissiveRedefinitions": true,
+      "asmFileSearchDirs": [
+        "goal_src/jak3",
+        "goal_src/user/hatkid"
+      ]
+    },
+    "keybinds": [
+      {
+        "modifier": "ctrl",
+        "key": "F",
+        "description": "Spawn process",
+        "command": "(ml \"proc\")"
+      }
+    ]
+  }

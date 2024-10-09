@@ -1,0 +1,574 @@
+;;;;;;;;;;;;;;;;;;;;;;
+;; jak 1
+;;;;;;;;;;;;;;;;;;;;;;
+
+(when (= *game-version* 'jak1)
+  (spawn-proc
+    :name "dupe"
+    :run #f
+    (format *stdcon* "hint #x~X~%~A~%~A~%" *hint-semaphore* *hint-semaphore* (ppointer->process *hint-semaphore*)))
+  (spawn-proc
+    :loop #f
+    :run #f
+    (let ((time (current-time))
+          (proc (the process-drawable (process-by-ename "fishermans-boat-2"))))
+      (while (<= (- (current-time) time) (seconds 4))
+        (if (= (rem (- (current-time) time) 300) 0) (format 0 "time elapsed ~D~%" (/ (- (current-time) time) 300)))
+        (aif proc (logior! (-> it draw status) (draw-status hidden)))
+        (suspend))
+      (awhen proc
+             (logclear! (-> it draw status) (draw-status hidden))
+             (run-function-in-process it ja-channel-set! 1 #f #f #f #f #f)))))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; jak 2
+;;;;;;;;;;;;;;;;;;;;;;
+
+(when (= *game-version* 'jak2)
+  (spawn-proc
+    :name "board-test"
+    :run #f
+    (with-target (format *stdcon* "rotyv ~f~%" (-> it board trotyv))
+                 (add-debug-text-sphere #t
+                                        (bucket-id debug-no-zbuf1)
+                                        (vector<-cspace! (new-stack-vector0) (-> it node-list data 25))
+                                        (meters 0.2)
+                                        "board"
+                                        (static-rgba 0 #xff 0 #x80))))
+  (spawn-proc
+    :name "hosehead-dbg"
+    :run #f
+    (awhen (the hosehead (process-by-ename "hosehead-9"))
+           (add-debug-x #t (bucket-id debug-no-zbuf2) (-> it jump-point) (static-rgba #xff 0 #xff #x80))
+           (format *stdcon*
+                   "hosehead state ~A jump-point dist ~f (~m)~%pos: "
+                   (-> it next-state name)
+                   (- (-> it root trans y) (-> it jump-point y))
+                   (- (-> it root trans y) (-> it jump-point y)))
+           (format-trans *stdcon* (-> it root trans))))
+  (spawn-proc
+    :name "excitement"
+    :run #f
+    (set-setting! 'sound-excitement 'abs 0.9 0))
+  (spawn-proc
+    :name "smol"
+    :run #f
+    (with-target (let ((dax (the sidekick (ppointer->process (-> it sidekick))))
+                       (gun (the gun (ppointer->process (-> it gun gun)))))
+                   (set-vector! (-> it root scale) 0.4 0.4 0.4 0.4)
+                   (when dax
+                     (set-vector! (-> dax root scale) 0.4 0.4 0.4 0.4)
+                     (set-vector! (-> dax offset scale) 0.4 0.4 0.4 0.4)
+                     (vector+! (-> dax root trans) (-> dax root trans) (static-vectorm 0 5 0))
+                     (set-vector! (-> *target* control sidekick-root parent bone scale) 0.4 0.4 0.4 0.4))
+                   (if gun (set-vector! (-> gun root scale) 0.4 0.4 0.4 0.4)))))
+  (spawn-proc
+    :name "djak-trigger"
+    :run #f
+    (define *trigger-darjak-long-anim?* #f)
+    (when *target*
+      (let* ((time (current-time))
+             (random-intervals (new 'static 'boxed-array :type time-frame (seconds 7200) (seconds 4500) (seconds 1500)))
+             (rand (rand-vu-int-range 0 2))
+             (interval (-> random-intervals rand)))
+        (until (time-elapsed? time interval)
+          (format *stdcon* "time interval ~d (~es) (time left ~es)~%" rand interval (- interval (- (current-time) time)))
+          (suspend))
+        (when (time-elapsed? time interval)
+          (true! *trigger-darjak-long-anim?*)
+          (send-event *target* 'change-mode 'darkjak #f (darkjak-stage active))
+          (false! *trigger-darjak-long-anim?*)))
+      (suspend)))
+  (spawn-proc
+    :loop #f
+    :run #f
+    (let ((time (current-time))
+          (manipy (-> (-> *hud-speedometer* 0) icons 0 icon 0)))
+      (awhen manipy
+             (while (not (time-elapsed? time (seconds 1)))
+               (format *stdcon*
+                       "rotating manipy x ~f y ~f z ~f w ~f"
+                       (-> it root quat x)
+                       (-> it root quat y)
+                       (-> it root quat z)
+                       (-> it root quat w))
+               ;; (if (= (rem (- (current-time) time) 300) 0)
+               ;;   (format 0 "time elapsed ~D~%" (/ (- (current-time) time) 300))
+               ;;   )
+               (quaternion-rotate-y! (-> it root quat) (-> it root quat) (degrees (* -45.0 (seconds-per-frame))))
+               ;; (quaternion-rotate-y! (-> it root quat) (-> it root quat) (degrees (* 45.0 (seconds-per-frame))))
+               ;; (quaternion-rotate-z! (-> it root quat) (-> it root quat) (degrees (* 45.0 (seconds-per-frame))))
+               (suspend)))
+      (deactivate self)))
+  (spawn-proc
+    :loop #f
+    :run #f
+    (let ((kor (process-spawn manipy
+                              :init
+                              manipy-init
+                              (target-pos 0)
+                              #f
+                              (art-group-get-by-name *level* "skel-metalkor" (the (pointer uint32) #f))
+                              #f
+                              0)))
+      (if kor
+        (let ((torso (process-spawn manipy
+                                    :init
+                                    manipy-init
+                                    (target-pos 0)
+                                    #f
+                                    (art-group-get-by-name *level* "skel-metalkor-lowtorso" (the (pointer uint32) #f))
+                                    #f
+                                    0
+                                    :to
+                                    (-> kor 0)))
+              (legs (process-spawn manipy
+                                   :init
+                                   manipy-init
+                                   (target-pos 0)
+                                   #f
+                                   (art-group-get-by-name *level* "skel-metalkor-legs" (the (pointer uint32) #f))
+                                   #f
+                                   0
+                                   :to
+                                   (-> kor 0))))))))
+  (spawn-proc
+    :name "kill-mask"
+    :run #f
+    (when (task-closed? "atoll-battle-resolution")
+      (aif (entity-by-name "spyder-53") (set! (-> (the entity-actor it) extra kill-mask) (task-mask task3)))
+      (aif (entity-by-name "spyder-2") (set! (-> (the entity-actor it) extra kill-mask) (task-mask task3)))
+      (aif (entity-by-name "spyder-4") (set! (-> (the entity-actor it) extra kill-mask) (task-mask task3)))))
+  (spawn-proc
+    :name "rider"
+    :run #f
+    (aif (the rift-rider (process-by-ename "rift-rider-5"))
+         (format *stdcon* "rift rider: ~m ~m ~m~%" (-> it root trans x) (-> it root trans y) (-> it root trans z))))
+  (spawn-proc
+    :name "endless"
+    :stack 512
+    :run #f
+    (define POINTA (static-vectorm 4462.1 13.734 -4912.1))
+    (define POINTB (static-vectorm 4856.8 13.381 -5266.1))
+    (when (and *target* (cpad-pressed? 0 l2))
+      (cond
+        ((focus-test? *target* pilot)
+         (let* ((tq (new 'stack 'transformq))
+                (v (the vehicle (handle->process (-> *target* pilot vehicle))))
+                (v-trans (-> v rbody state position)))
+           (vector-! v-trans v-trans POINTB)
+           (vector+! v-trans v-trans POINTA)
+           (vector-copy! (-> tq trans) (-> *math-camera* trans))
+           (vector-! (-> tq trans) (-> tq trans) POINTB)
+           (vector+! (-> tq trans) (-> tq trans) POINTA)
+           (set-vector! (-> tq scale) 1.0 1.0 1.0 1.0)
+           (matrix->quaternion (-> tq quat) (-> *math-camera* inv-camera-rot))
+           (suspend)
+           (send-event *camera* 'teleport-to-transformq tq)
+           (vector-reset! (-> v rbody state ang-momentum))
+           (vector-copy! (-> *math-camera* trans) (-> tq trans))
+           (vector-copy! (-> *math-camera* prev-trans) (-> tq trans))
+           (vector-copy! (-> *math-camera* trans-other) (-> tq trans))
+           (vector-copy! (-> *camera-combiner* trans) (-> tq trans))))
+        (else
+         (vector-! (-> *target* root trans) (-> *target* root trans) POINTB)
+         (vector+! (-> *target* root trans) (-> *target* root trans) POINTA)
+         (let ((tq (new 'stack 'transformq)))
+           (vector-copy! (-> tq trans) (-> *math-camera* trans))
+           (vector-! (-> tq trans) (-> tq trans) POINTB)
+           (vector+! (-> tq trans) (-> tq trans) POINTA)
+           (set-vector! (-> tq scale) 1.0 1.0 1.0 1.0)
+           (matrix->quaternion (-> tq quat) (-> *math-camera* inv-camera-rot))
+           (suspend)
+           (send-event *camera* 'teleport-to-transformq tq)
+           (vector-copy! (-> *math-camera* trans) (-> tq trans))
+           (vector-copy! (-> *math-camera* prev-trans) (-> tq trans))
+           (vector-copy! (-> *math-camera* trans-other) (-> tq trans))
+           (vector-copy! (-> *camera-combiner* trans) (-> tq trans)))))))
+  (spawn-proc
+    :name "water"
+    :run #f
+    (if *target*
+      (let ((water (new 'stack 'water-info)))
+        (set! (-> water trans quad) (-> *target* control trans quad))
+        (set-vector! (-> water normal) 0.0 1.0 0.0 1.0)
+        (set! (-> water flags) (water-flags active use-ocean can-swim can-wade can-ground))
+        (set! (-> water trans y) (get-height *ocean* (-> water trans) #f))
+        (set! (-> water base-height) (get-base-height *ocean-map*))
+        (when (= (-> water trans y) 4095996000.0)
+          (set! (-> water flags) (water-flags))
+          0)
+        (if (and (logtest? (water-flags event) (-> water flags)) (logtest? (water-flags touch-water) (-> arg0 flags)))
+          (send-event *target* 'water water (-> arg2 process)))
+        (water-info-init! (-> *target* control) water (collide-action solid semi-solid)))))
+  (spawn-proc
+    :loop #f
+    :run #f
+    (let ((ocean (new 'static 'region :id 1000 :on-inside '(water ocean 0 (swim wade))))
+          (tree (new 'static 'array drawable-region-tree-prim 1)))
+      (define *village1-ocean* (new 'static 'region))
+      (set! (-> *village1-ocean* id) 1000)
+      (set! (-> *village1-ocean* on-inside) '(water ocean 0 (swim wade)))
+      (set! (-> *level* level 0 bsp region-array) (new 'static 'region-array 1))
+      (set! (-> *level* level 0 bsp region-array 0) *village1-ocean*))))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; jak 3
+;;;;;;;;;;;;;;;;;;;;;;
+
+(when (= *game-version* 'jak3)
+  (spawn-proc
+    :name "cur-vehicle"
+    :run #f
+    (with-target (when (and (nonzero? (-> it pilot)) (focus-test? it pilot))
+                   (format *stdcon* "pilot: ~S~%" (enum->string vehicle-type (-> *game-info* current-vehicle))))))
+  (spawn-proc
+    :name "max-storm"
+    :run #f
+    (awhen (the desert-dust-storm (handle->process (-> *game-info* dust-storm))) (set! (-> it intensity) 5.0)))
+  (spawn-proc
+    :name "rbody"
+    :run #f
+    (awhen (the vol-stone-lid (get-actor "vol-stone-lid-6"))
+           (format *stdcon* "stone-lid:~%force-pos ~`vector`P~%" (-> it player-force-position))))
+  (spawn-proc
+    :name "jg-test"
+    :loop #f
+    :run #f
+    (let ((func (lambda :behavior target ()
+                  (inspect (joint-node jakb-lod0-jg neckB))
+                  (inspect (-> self node-list data 8))
+                  (suspend-for (seconds 15)
+                    (draw-joint-spheres self)))))
+      (with-target (run-now-in-process it func))))
+  (spawn-proc
+    :name "marauder-nan-dbg"
+    :run #f
+    (when (get-taskman)
+      (with-target (let ((iter (lambda ((p process))
+                                 (when (= (-> p type) marauder)
+                                   (let ((m (the marauder p)))
+                                     (format *stdcon* "~A~%trans ~`vector`P~%" m (-> m root trans))
+                                     (add-debug-line #t
+                                                     (bucket-id debug-no-zbuf1)
+                                                     (-> *target* control trans)
+                                                     (-> m root trans)
+                                                     (static-rgba 0 #xaa 0 #x80)
+                                                     #f
+                                                     (the rgba -1)))))))
+                     (iterate-process-tree (get-taskman) iter *null-kernel-context*)))))
+  (spawn-proc
+    :name "robo-hover-nan"
+    :run #f
+    (let ((iter (lambda ((p process))
+                  (when (= (-> p type) robo-hover)
+                    (let ((r (the robo-hover p)))
+                      (format 0 "~A~%~f ~f ~f ~f~%" r (-> r wrist-quat 0 x) (-> r wrist-quat 0 y) (-> r wrist-quat 0 z) (-> r wrist-quat 0 w))
+                      (format 0 "~f ~f ~f ~f~%" (-> r wrist-quat 1 x) (-> r wrist-quat 1 y) (-> r wrist-quat 1 z) (-> r wrist-quat 1 w)))))))
+      (iterate-process-tree *active-pool* iter *null-kernel-context*)))
+  (spawn-proc
+    :name "rbody-bonk-dbg"
+    :run #f
+    (let ((iter (lambda ((p process))
+                  (when (= (-> p type) vol-stone-lid)
+                    (let ((v (the vol-stone-lid p))) (debug-print-info (-> v rbody) 0))))))
+      (iterate-process-tree *active-pool* iter *null-kernel-context*)))
+  (spawn-proc
+    :name "bombbot-bomb-dbg"
+    :run #f
+    (let ((iter (lambda ((p process))
+                  (when (= (-> p type) bombbot-bomb)
+                    (let ((b (the bombbot-bomb p))) (format *stdcon* "~A~%~`vector`P~%" b (-> b root trans))))))
+          (iter1 (lambda ((p process))
+                   (when (= (-> p type) bombbot)
+                     (let ((b (the bombbot p))) (format *stdcon* "~A~%~`vector`P~%" b (-> b target-pos)))))))
+      (iterate-process-tree *active-pool* iter *null-kernel-context*)
+      (iterate-process-tree *active-pool* iter1 *null-kernel-context*)))
+  (spawn-proc
+    :name "wasp-dbg"
+    :run #f
+    (let ((iter (lambda ((p process))
+                  (when (= (-> p type) mh-wasp)
+                    (let ((w (the mh-wasp p)))
+                      (format *stdcon* "~A~%~`vector`P~%" w (-> w root trans))
+                      (when (and (-> w hover path-info curr-segment) (-> w hover path-info curr-segment curve-matrix))
+                        (format *stdcon* "~`matrix`I" (-> w hover path-info curr-segment curve-matrix)))
+                      (add-debug-line #t
+                                      (bucket-id debug-no-zbuf1)
+                                      (-> *target* control trans)
+                                      (-> w root trans)
+                                      (static-rgba 0 #xaa 0 #x80)
+                                      #f
+                                      (the rgba -1)))))))
+      (iterate-process-tree *active-pool* iter *null-kernel-context*)))
+  (spawn-proc
+    :name "bbush-egg-spider-dbg"
+    :run #f
+    (let ((hud-score (the hud-spider-killed (process-by-type *active-pool* hud-spider-killed))))
+      (awhen hud-score
+             (format *stdcon*
+                     "hud score current ~D target ~D~%game-info score ~f (~D)~%"
+                     (-> it values 0 current)
+                     (-> it values 0 target)
+                     (-> *game-info* score)
+                     (-> *game-info* score)))))
+  (spawn-proc
+    :name "eyes-dbg"
+    :run #f
+    (format *stdcon* "eyes-debug~%")
+    (dotimes (i LEVEL_MAX)
+      (when (and (-> *level* level i) (= (-> *level* level i status) 'active))
+        (format *stdcon* "level ~A eye slots:~%" (-> *level* level i name))
+        (dotimes (j 11)
+          (if (or (> (-> *level* level i eye-slot-lowres j) 0) (> (-> *level* level i eye-slot-highres j) 0))
+            (format *stdcon*
+                    "~Tlowres ~D: ~D highres ~D: ~D~%"
+                    j
+                    (-> *level* level i eye-slot-lowres j)
+                    j
+                    (-> *level* level i eye-slot-highres j))))))
+    (dotimes (i 32)
+      (let* ((eye-ctrl (-> *eye-control-array* data i))
+             (proc (the process-drawable (handle->process (-> eye-ctrl process))))
+             (merc-eye (aif proc (-> it draw mgeo header eye-ctrl))))
+        (when (and proc merc-eye)
+          (format *stdcon* "slot ~D ~A~%" i proc)
+          (format *stdcon* "~Ttbp ~D~%" (-> eye-ctrl shaders 0 tex0 tbp0))
+          (format *stdcon* "~Tlevel-idx ~D~%" (-> eye-ctrl level-index))
+          (format *stdcon* "~Thigh-res ~A~%" (-> eye-ctrl high-res?))
+          (format *stdcon* "~Tmerc-eye-ctrl slot ~D eye-idx ~D~%" (-> merc-eye eye-slot) (-> merc-eye eye-ctrl-index)))))))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; all
+;;;;;;;;;;;;;;;;;;;;;;
+
+(spawn-proc
+  :name "draw-tris"
+  :stack 512
+  :mask (menu)
+  :run #f
+  (let* ((proc (get-actor :as test-actor "test-actor"))
+         (mesh (-> (res-lump-struct (-> proc draw art-group data 0 extra) 'collide-mesh-group (array collide-mesh)) 0)))
+    (debug-draw-tris mesh proc (-> mesh joint-id))))
+
+(spawn-proc
+  :name "toggle-decompressor"
+  :run #f
+  (format *stdcon* "*use-new-decompressor* ~A~%" *use-new-decompressor*)
+  (when (cpad-pressed? 0 l3)
+    (not! *use-new-decompressor*)))
+
+(spawn-proc
+  :loop #f
+  :run #f
+  (let ((time (current-time)))
+    (while (<= (- (current-time) time) (seconds 5))
+      (with-dma-buffer-add-bucket ((debug-buf (-> (current-frame) debug-buf)) (bucket-id debug-no-zbuf2))
+        (draw-string-xy (string-format "This message will self-destruct in ~D"
+                                       (inc (/ (- (seconds 5) (- (current-time) time)) TICKS_PER_SECOND)))
+                        debug-buf
+                        0
+                        0
+                        (font-color default)
+                        (font-flags shadow kerning)))
+      (suspend))
+    (deactivate self)))
+
+(spawn-proc
+  :name "speedo"
+  :run #f
+  (awhen *target*
+         (let ((xz-vel (new-stack-vector0))
+               (y-vel (vector-dot (-> *target* control dynam gravity-normal) (-> *target* control transv))))
+           (vector-! xz-vel (-> *target* control transv) (vector-float*! xz-vel (-> *target* control dynam gravity-normal) y-vel))
+           (format *stdcon* "xz-vel: ~f~%" (vector-length xz-vel)))))
+
+(spawn-proc
+  :name "cam-dir"
+  :run #f
+  (with-target (add-debug-vector #t
+                                 (bucket-id debug-no-zbuf1)
+                                 (-> it control trans)
+                                 (vector-z-quaternion! (new-stack-vector0) (matrix->quat (-> *math-camera* inv-camera-rot) (new-stack-quaternion0)))
+                                 (meters 2)
+                                 (static-rgba #xff #xff 0 #x80))))
+
+(spawn-proc
+  :name "target-dir"
+  :run #f
+  (with-target (let ((dir (new-stack-vector0))
+                     (off (static-vector (meters 1) 0.0 0.0 1.0)))
+                 (vector-matrix*! dir off (-> it control c-R-w))
+                 (vector-float*! dir dir 0.5)
+                 (vector+! dir dir (-> it control trans))
+                 (add-debug-text-sphere #t (bucket-id debug-no-zbuf1) dir (meters 0.2) "target-dir" (static-rgba 0 #xff 0 #x80))
+                 (add-debug-vector #t
+                                   (bucket-id debug-no-zbuf1)
+                                   (-> it control trans)
+                                   (-> it control c-R-w vector 2)
+                                   (meters 2)
+                                   (static-rgba #xff #xff 0 #x80)))))
+
+(spawn-proc
+  :name "target-dist"
+  :run #f
+  (let ((vec (static-vector 0.0 0.0 0.0 1.0)))
+    (format *stdcon* "proc dist: ~f~%" (/ (vector-vector-distance (target-pos 0) vec) (meters 1)))))
+
+(spawn-proc
+  :loop #f
+  :run #f
+  (suspend-for (seconds 4)
+    (format 0 "number 1 ~D number 2 ~D~%" (current-time) (- (current-time) time) (seconds 4)))
+  (format 0 "time is up, we will die~%"))
+
+(spawn-proc
+  :name "milli"
+  :run #f
+  (let ((time (current-time))) (format *stdcon* "curtime ~D ~es~%" (current-time) (current-time))))
+
+(spawn-proc
+  :stack 512
+  :loop #f
+  :run #f
+  (with-target
+    ; (set-vector! (-> it control trans) 0.0 (meters -42) (meters -50) 1.0)
+    (vector-copy! (-> it control transv) *zero-vector*)
+    ; (quaternion-identity! (-> it control quat))
+    ; (quaternion-identity! (-> it control quat-for-control))
+    ; (quaternion-identity! (-> it control dir-targ))
+    (let ((tq (new 'stack 'transformq)))
+      (vector-copy! (-> tq trans) (-> it control trans))
+      (quaternion-copy! (-> tq quat) (-> it control quat))
+      (vector-identity! (-> tq scale))
+      ;; teleport needs to be on the next frame
+      (suspend)
+      (send-event *camera* 'teleport-to-transformq tq))))
+
+(spawn-proc
+  :loop #f
+  :run #f
+  (iterate-process-tree *entity-pool*
+                        (lambda ((proc process))
+                          (when (-> proc entity)
+                            (let ((vec (-> proc entity trans))
+                                  (quat (-> proc entity quat))
+                                  (name (the string (-> proc name))))
+                              (format #t "~S trans: ~m ~m ~m~%" name (-> vec x) (-> vec y) (-> vec z))
+                              (format #t "~S quat: ~f ~f ~f ~f~%" name (-> quat x) (-> quat y) (-> quat z) (-> quat w)))))
+                        *kernel-context*))
+
+;;;;;;;;;;;;;;;;;;;;;;
+;; tfl
+;;;;;;;;;;;;;;;;;;;;;;
+
+(when (= *game-version* 'jak1)
+  (spawn-proc
+    :name "cam-dbg"
+    :run #f
+    (awhen (the camera-slave (ppointer->process (-> *camera* slave 0)))
+           (format *stdcon*
+                   "string length ratio ~f~%string length -min ~f~%string length ~f~%"
+                   (/ (- (vector-length (-> it view-flat)) (-> it string-min-val z)) (- (-> it string-max-val z) (-> it string-min-val z)))
+                   (- (vector-length (-> it view-flat)) (-> it string-min-val z))
+                   (vector-length (-> it view-flat)))))
+  (spawn-proc
+    :name "buzzer-dbg"
+    :run #f
+    (let* ((task (game-task crystalc-buzzer))
+           (count (buzzer-count *game-info* task))
+           (ctrl (get-task-control task))
+           (reminder (get-reminder ctrl 0)))
+      (format *stdcon* "buzzer task ~D (count ~D)~%" task count)
+      (format *stdcon* "reminder #b~b (~D)~%" reminder reminder)
+      (dotimes (i 7)
+        (format *stdcon* "~D: ~D ~A~%" (+ task (* i 65536)) i (logtest? reminder (ash 1 i))))))
+  (spawn-proc
+    :name "lowreskui-dbg"
+    :run #f
+    (let* ((task (game-task tfl-lowreskui))
+           (count (lowreskui-collected-count))
+           (perm (get-entity-task-perm *game-info* task))
+           (bits (-> perm user-uint64)))
+      (format *stdcon* "lowreskui task ~D (count ~D)~%" task count)
+      (format *stdcon* "perm #b~b (~D)~%" bits bits)
+      (dotimes (i LOWRESKUI_COUNT)
+        (format *stdcon*
+                "lowreskui ~D (~A): ~A~%"
+                i
+                (-> *lowreskui-info* i level)
+                (logtest? bits (ash 1 (-> *lowreskui-info* i index)))))))
+  (defun reset-buzzer ((e entity-actor))
+    (when (and (= (-> e etype) crate)
+               (or (= (res-lump-struct e 'crate-type symbol) 'iron)
+                   (= (the pickup-type (-> (res-lump-data e 'eco-info (pointer int32)) 0)) (pickup-type buzzer)))
+               (logtest? (-> e extra perm status) (entity-perm-status complete user-set-from-cstage dead)))
+      (let* ((eco-info (res-lump-data e 'eco-info (pointer int32)))
+             (amount (-> eco-info 1))
+             (index (sar (the int amount) 16))
+             (ctrl (get-task-control (-> e task)))
+             (reminder (get-reminder ctrl 0)))
+        (when (logtest? reminder (ash 1 index))
+          (save-reminder ctrl (logclear reminder (ash 1 index)) 0)
+          (logclear! (-> e extra perm status) (entity-perm-status complete user-set-from-cstage dead))
+          (set! (-> e extra perm user-uint8 0) 0)
+          (set! (-> e extra perm user-uint8 1) 0)
+          (1-! (-> *target* fact buzzer))
+          (1-! (-> *game-info* buzzer-total))
+          (birth! e)))))
+  (spawn-proc
+    :name "flags"
+    :run #f
+    (awhen *target*
+           (format *stdcon*
+                   "(state-flags ~S)"
+                   (begin
+                     (bit-enum->string state-flags (-> it state-flags) (clear *temp-string2*))
+                     *temp-string2*))))
+  (spawn-proc
+    :name "lurker-quat"
+    :loop #f
+    :run #f
+    (let ((time (current-time))
+          (gnawer (the digging-lurker (process-by-ename "crystalc-digging-lurker-01"))))
+      (awhen gnawer
+             (while (not (time-elapsed? time (seconds 1)))
+               ;; (if (= (rem (- (current-time) time) 300) 0)
+               ;;   (format *stdcon* "time elapsed ~D~%" (/ (- (current-time) time) 300))
+               ;;   )
+               (quaternion-rotate-x! (-> it cshape quat) (-> it cshape quat) (degrees (* 55.0 (seconds-per-frame))))
+               ;; (quaternion-rotate-y! (-> it cshape quat) (-> it cshape quat) (degrees (* 45.0 (seconds-per-frame))))
+               ;; (quaternion-rotate-z! (-> it cshape quat) (-> it cshape quat) (degrees (* 45.0 (seconds-per-frame))))
+               (suspend)))))
+  (spawn-proc
+    :name "hint-test"
+    :run #f
+    (format *stdcon* "tfl-hint-playing? ~A~%" *tfl-hint-playing?*)
+    (format *stdcon* "tfl-hint-semaphore ~A~%" (ppointer->process *tfl-hint-semaphore*))
+    (awhen (the tfl-hint (process-by-ename "energy-bay-tfl-hint-00")) (format *stdcon* "hint ~A~%" it)))
+  (spawn-proc
+    :loop #f
+    :run #f
+    (let ((time (current-time)))
+      (when (not (play-tfl-hint "DS017.wav" 35 #t))
+        (deactivate self))
+      (dotimes (i 2)
+        (suspend))
+      (let ((box (ppointer->process (voicebox-spawn *target* (target-pos 0)))))
+        (until (not *tfl-hint-playing?*)
+          (format *stdcon* "tfl-hint-playing? ~A ~D~%" *tfl-hint-playing?* (- (current-time) time))
+          (suspend))
+        (send-event box 'die))))
+  (spawn-proc
+    :name "arc-test"
+    :run #f
+    (let ((proc (the process-drawable (process-by-ename "crystalc-electric-arc-01"))))
+      ;; (logclear! (-> (the process-drawable (process-by-ename "crystalc-electric-arc-01")) draw status) (draw-status needs-clip))
+      (aif proc
+           (format *stdcon*
+                   "electric-arc draw-status: ~S~%"
+                   (begin
+                     (bit-enum->string draw-status (-> it draw status) (clear *temp-string*))
+                     *temp-string*)))
+      (inspect (-> (the collide-shape (-> (the electric-arc (process-by-ename "crystalc-electric-arc-01")) root)) root-prim))))
+  (proc-sus 4 :run #f (send-event (process-by-ename "babak-207") 'effect 'eco-blue)))

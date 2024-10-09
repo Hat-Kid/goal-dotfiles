@@ -1,0 +1,105 @@
+(defmacro defnew (type-to-make bindings &rest body)
+  "Defines the new method, which allocates a new instance of the type and returns it."
+  `(defmethod new ,type-to-make ((allocation symbol) (new-type type) ,@bindings)
+    (let ((this (object-new allocation new-type (the-as int (-> new-type size))))) ,@body this)))
+
+(defmacro definit (type bindings &rest body)
+  "Defines an 'init-by-other' behavior for the given type."
+  `(defbehavior ,(string->symbol (fmt #f "{}-init-by-other" type)) ,type ,bindings
+    ,@body))
+
+(defmacro defevent (name process-type &rest body)
+  "Define an event handler for a process."
+  `(defbehavior ,name ,process-type ((proc process) (argc int) (message symbol) (block event-message-block))
+    ,@body))
+
+;; original 'defclass' macro from https://github.com/open-goal/jak-project/pull/2126
+(defmacro defproc (type parent-type &rest elements)
+  "deftype that supports declaring fields, methods,
+   behaviors, states, skelgroups, options, other types, and globals within the type.
+   Automatically predeclares methods and states."
+  (with-gensyms (fields methods behaviors events init states virtual-states state-handlers skelgroups options types globals)
+    (set! fields '())
+    (set! methods '())
+    (set! behaviors '())
+    (set! events '())
+    (set! init '())
+    (set! states '())
+    (set! virtual-states '())
+    (set! state-handlers '())
+    (set! skelgroups '())
+    (set! options '())
+    (set! types '())
+    (set! globals '())
+    (apply (lambda (element)
+             (cond
+               ((string? element)
+                ;; docstrings can be placed before any element, ignored for now
+                #f)
+               ((eq? (car element) (string->symbol ":fields")) (set! fields (cdr element)))
+               ((eq? (car element) (string->symbol ":methods")) (set! methods (cdr element)))
+               ((eq? (car element) (string->symbol ":behaviors")) (set! behaviors (cdr element)))
+               ((eq? (car element) (string->symbol ":events")) (set! events (cdr element)))
+               ((eq? (car element) (string->symbol ":init")) (set! init (cdr element)))
+               ((eq? (car element) (string->symbol ":state-handlers")) (set! state-handlers (cdr element)))
+               ((eq? (car element) (string->symbol ":states")) (set! states (cdr element)))
+               ((eq? (car element) (string->symbol ":virtual-states")) (set! virtual-states (cdr element)))
+               ((eq? (car element) (string->symbol ":skelgroups")) (set! skelgroups (cdr element)))
+               ((eq? (car element) (string->symbol ":options")) (set! options (cdr element)))
+               ((eq? (car element) (string->symbol ":types")) (set! types (cdr element)))
+               ((eq? (car element) (string->symbol ":globals")) (set! globals (cdr element)))
+               (#t
+                ;; Did not have any tag, so we assume it's a fields list
+                ;; TODO: Check for unsupported tags and print a warning
+                (set! fields element))))
+           elements)
+    `(begin
+      (declare-type ,type ,@(if (eq? parent-type '()) `(basic) parent-type))
+      ,@(if (eq? skelgroups '())
+        `(#f)
+        (apply (lambda (skelgroup)
+                 `(defskelgroup ,(car skelgroup)
+                   ,(car (cdr skelgroup))
+                   ,(car (cddr skelgroup))
+                   ,(car (cdddr skelgroup))
+                   ,@(cdr (cdddr skelgroup))))
+               skelgroups))
+      ,@(if (eq? types '())
+        `(#f)
+        (apply (lambda (type)
+                 `(defproc ,(car type) ,(cadr type)
+                   ,@(cddr
+                    type)))
+               types))
+      (deftype ,type ,(if (eq? parent-type '()) `(basic) parent-type)
+        ,fields
+        (:methods
+         ,@(apply (lambda (method) (if (eq? (car method) 'new) `(new (symbol type ,@(apply (lambda (param-pair) (cadr param-pair)) (cadr method))) ,type) `(,(car method) (_type_ ,@(apply (lambda (param-pair) (cadr param-pair)) (cadr method))) ,@(caddr method)))) methods))
+        (:states
+         ,@(apply (lambda (state) `(,(car state))) states))
+        (:state-methods
+         ,@(apply (lambda (virtual-state) `(,(car virtual-state))) virtual-states))
+        ,@(if (neq? options '()) options '()))
+      ,@(if (eq? globals '())
+        `(#f)
+        (apply (lambda (global)
+                 (if (pair? (car global)) `(define-perm ,(caar global) ,(cadar global) ,(cadr global)) `(define ,(car global) ,(cadr global))))
+               globals))
+      ,@(if (eq? methods '())
+        `(#f)
+        (apply (lambda (method)
+                 (if (eq? (car method) 'new)
+                   `(defnew ,type (,@(cadr method)) ,@(cddr method))
+                   `(defmethod ,(car method) ((this ,type) ,@(cadr method))
+                     ,@(cdddr method))))
+               methods))
+      ,@(if (eq? behaviors '())
+        `(#f)
+        (apply (lambda (behavior) `(defbehavior ,(car behavior) ,type ,(cadr behavior) ,@(cddr behavior))) behaviors))
+      ,@(if (eq? events '()) `(#f) (apply (lambda (event) `(defevent ,(car event) ,type ,@(cdr event))) events))
+      ,(if (eq? init '()) #f `(definit ,type ,(car init) ,@(cdr init)))
+      ,(if (eq? state-handlers '()) #f `(defstatehandler ,type ,@(car state-handlers)))
+      ,@(if (eq? states '()) `(#f) (apply (lambda (state) `(defstate ,(car state) (,type) ,@(cdr state))) states))
+      ,@(if (eq? virtual-states '())
+        `(#f)
+        (apply (lambda (virtual-state) `(defstate ,(car virtual-state) (,type) :virtual #t ,@(cdr virtual-state))) virtual-states)))))

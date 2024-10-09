@@ -1,0 +1,58 @@
+(defproc bg-reload (process)
+  ((level symbol))
+  (:init
+   ((lvl symbol))
+   (logclear! (-> self mask) (process-mask menu pause))
+   (set! (-> self level) lvl)
+   (go-virtual idle))
+  (:behaviors
+   (reload-custom-level
+     ((level-name symbol))
+     (when (= (lookup-level-info level-name) default-level)
+       (deactivate self))
+     ; (set-master-mode 'menu)
+     (dotimes (i 2)
+       (unload! (-> *level* level i)))
+     (reset! *load-state*)
+     (awhen *target* (run-next-time-in-process it (lambda :behavior target () (suspend-for (seconds 2)))))
+     (suspend-for (seconds 2)
+       (format *stdcon* "waiting for FR3 unload... ~D~%" (time-remaining 2 time))
+       (__pc-set-levels "training" "village1"))
+     (process-release? *target*)
+     (set! (-> *level* vis?) #t)
+     (set! (-> *level* border?) #f)
+     (set! (-> *setting-control* default border-mode) #f)
+     (set! (-> *level* play?) #f)
+     (set! *vis-actors* #f)
+     (let* ((cont (get-or-create-continue! *game-info*))
+            (lev0 (-> cont lev0))
+            (disp0 (-> cont disp0))
+            (lev1 (-> cont lev1))
+            (disp1 (-> cont disp1)))
+       (load-state-want-levels lev0 lev1)
+       (while (or (symbol-member? (-> *level* level0 status) '(login loading loading-bt))
+                  (symbol-member? (-> *level* level1 status) '(login loading loading-bt)))
+         (format #t
+                 "waiting for levels to load... l0 status ~A l1 status ~A~%"
+                 (-> *level* level0 status)
+                 (-> *level* level1 status))
+         (load-continue (-> *level* level0))
+         (load-continue (-> *level* level1))
+         (suspend))
+       (load-state-want-display-level lev0 disp0)
+       (load-state-want-display-level lev1 disp1)
+       ; (set-master-mode 'game)
+       )))
+  (:virtual-states
+   (idle
+     :enter
+     (behavior ()
+       (logclear! (-> self mask) (process-mask menu pause)))
+     :code
+     (behavior ()
+       (reload-custom-level (-> self level))))))
+
+(defmacro fr3-reload (lvl)
+  `(begin
+    (mi)
+    (process-spawn bg-reload ,lvl)))

@@ -1,0 +1,108 @@
+(defmacro mlr (name)
+  `(begin
+    (ml ,name)
+    (reset-actors 'debug)))
+
+(defmacro as-type (type this)
+  `(let ((obj ,this)) (if (not (type-type? ,type (-> obj type))) obj (if (type? obj ,type) (the ,type obj)))))
+
+(defmacro suspend-for (time &rest body)
+  `(let ((time (current-time))) (until (time-elapsed? time ,time) ,@body (suspend))))
+
+(defmacro time-remaining (s t)
+  `(- ,s (/ (- (current-time) ,t) TICKS_PER_SECOND)))
+
+(defmacro spawn-proc (&key (type process) &key (run #t) &key (loop #t) &key (name #f) &key (stack 128) &key (mask (pause menu)) &rest body)
+  `(#cond
+    (,(not run))
+    (#t
+     (begin
+       (if ,name (kill-by-name ,name *active-pool*))
+       (process-spawn-function ,type
+         :name ,name
+         (lambda :behavior ,type
+           ()
+           (stack-size-set! (-> self main-thread) ,stack)
+           (process-mask-set! (-> self mask) ,@mask)
+           (if ,loop (loop   ,@body   (suspend)) (begin   ,@body))))))))
+
+(defmacro proc-sus (s &key (run #t) &rest body)
+  `(spawn-proc
+    :name #f
+    :loop #f
+    :run ,run
+    (suspend-for (seconds ,s)
+      ,@body)))
+
+(defmacro with-target (&rest body)
+  `(awhen *target* ,@body))
+
+(defmacro temp-string-format (temp-str &rest args)
+  `(begin
+    (format (clear ,temp-str) ,@args)
+    ,temp-str))
+
+(defmacro vector-format (vec &key (buf (the string #f)) &key (newline #t) &key (meters #t) &key (w #f))
+  `(if ,buf
+    (let ((str (if ,w
+                 (if ,meters (if ,newline "~m ~m ~m ~m~%" "~m ~m ~m ~m") (if ,newline "~f ~f ~f ~f~%" "~f ~f ~f ~f"))
+                 (if ,meters (if ,newline "~m ~m ~m~%" "~m ~m ~m") (if ,newline "~f ~f ~f~%" "~f ~f ~f")))))
+      (temp-string-format ,buf str (-> ,vec x) (-> ,vec y) (-> ,vec z) (if ,w (-> ,vec w)))
+      (string-format str (-> ,vec x) (-> ,vec y) (-> ,vec z) (if ,w (-> ,vec w))))))
+
+(defmacro format-trans (buf vec &key (newline #t))
+  `(format ,buf (if ,newline "~m ~m ~m~%" "~m ~m ~m") (-> ,vec x) (-> ,vec y) (-> ,vec z)))
+
+(defmacro print-bit-enum (enum val &key (buf *temp-string*))
+  `(begin
+    (bit-enum->string ,enum ,val (clear ,buf))
+    ,buf))
+
+(defmacro proc-func (&rest body)
+  `(lambda ((p process))
+    ,@body))
+
+(define *pid-proc* (the process #f))
+
+(define *pid* 0)
+
+(defun pid->process ((pid int))
+  (set! *pid* pid)
+  (iterate-process-tree *active-pool*
+                        (proc-func (when (= (-> p pid) *pid*) (format 0 "got proc with matching pid ~D~%" (-> p pid)) (set! *pid-proc* p)))
+                        *null-kernel-context*)
+  *pid-proc*)
+
+(defmacro actor-inspect (name)
+  `(inspect (process-by-ename ,name)))
+
+(defmacro get-actor (&key (as process-drawable) name)
+  `(the ,as (process-by-ename ,name)))
+
+(defmacro get-taskman (&key (as task-manager) &key (proc (the process #f)))
+  `(the ,as (command-get-process '*task-manager* ,proc)))
+
+(define *global-search-type* (the type #f))
+
+(defun process-by-type ((tree process-tree) (type type))
+  (set! *global-search-type* type)
+  (when *global-search-type*
+    (search-process-tree tree (proc-func (= (-> p type) *global-search-type*)))))
+
+(defmacro debug-print-proc (&key (name #f) &key (buf 0) str &rest args)
+  `(when (or (not ,name) (name= (-> self name) ,name))
+    (format ,buf ,str ,@args)))
+
+(define *inspect-last* (the object #f))
+
+(defun inspect-last ()
+  (when *inspect-last*
+    ((method-of-type (rtype-of *inspect-last*) inspect) *inspect-last*)))
+
+(defmacro inspect! (obj)
+  `(begin
+    (set! *inspect-last* ,obj)
+    ((method-of-type (rtype-of ,obj) inspect) ,obj)))
+
+(defmacro awhen-proc (name &rest body)
+  `(awhen (process-by-name ,name *active-pool*) ,@body))

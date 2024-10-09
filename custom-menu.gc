@@ -1,0 +1,586 @@
+;;-*-Lisp-*-
+(in-package goal)
+
+#|
+@file
+Custom menu with a process inspector. Replaces popup menu (L3 + Select).
+|#
+
+(declare-file (debug))
+
+(defconstant POOL_MENU_COUNT 4)
+
+(defun-extern cm-proc-flag-func (pointer process) debug-menu-msg symbol)
+
+(defmacro make-pool-lambda (idx &key (with-entities #f) &key (show-pid #f))
+  `(lambda ((p process))
+    (let ((flag (new-dm-flag (if ,show-pid (new 'debug 'string 48 (the string #f)) (-> p name)) (process->ppointer p) cm-proc-flag-func)))
+      (if ,show-pid (temp-string-format (-> flag name) "~S (pid ~D)" (-> p name) (-> p pid)))
+      (if ,with-entities
+        (debug-menu-append-item (-> *process-pick-menus* menus ,idx) flag)
+        (if (not (-> p entity)) (debug-menu-append-item (-> *process-pick-menus* menus ,idx) flag))))))
+
+(defun count-heap-objects ((p process))
+  (if p
+    (let ((count 0)
+          (heap-ptr (&+ (-> p heap-base) *gtype-basic-offset*)))
+      (while (< heap-ptr (-> p heap-cur))
+        (1+! count)
+        (&+! heap-ptr (align16 (asize-of (the basic heap-ptr)))))
+      count)
+    0))
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;;; process inspector
+;;;;;;;;;;;;;;;;;;;;;;;
+
+(defproc process-inspector (process)
+  ((proc      (pointer process))
+   (obj-idx   int32)
+   (obj-count int32))
+  (:types
+   (process-inspector-settings
+     (structure)
+     ((scroll-y int32)
+      (scroll-y-max int32)
+      (scroll-lock? symbol)
+      (lock-time time-frame)
+      (unlock-time time-frame)
+      (show-inspect symbol)
+      (show-debug-text symbol)
+      (show-trans symbol)
+      (show-quat symbol))
+     (:globals (*process-inspector-settings* (new 'static 'process-inspector-settings)))
+     (:methods
+      (reset! ()
+              (object)
+              (set! (-> this scroll-y) 0)
+              (set! (-> this scroll-y-max) 0)
+              (false! (-> this scroll-lock?))
+              (set! (-> this lock-time) 0)
+              (true! (-> this show-inspect))
+              (true! (-> this show-debug-text))
+              (true! (-> this show-trans))
+              (true! (-> this show-quat))))))
+  (:globals
+   ((*process-inspector* (pointer process-inspector)) (the (pointer process-inspector) #f))
+   ((*process-inspector-buffer* string) (new 'debug 'string #x1000 (the string #f)))
+   ((*process-inspector-temp-buf* string) (new 'debug 'string #x1000 (the string #f))))
+  (:init
+   ((proc process))
+   (set! *process-inspector* (the (pointer process-inspector) (process->ppointer self)))
+   (reset! *process-inspector-settings*)
+   (set! (-> self proc) (process->ppointer proc))
+   (set! (-> self obj-idx) -1)
+   (when proc (set! (-> self obj-count) (count-heap-objects proc)) (set! (-> self obj-idx) 0))
+   ;; (set! (-> self settings) (new 'process 'process-inspector-settings))
+   ;; allow process to start while in menu mode, we clear the menu mask immediately when entering the idle state.
+   (logclear! (-> self mask) (process-mask pause menu))
+   (go process-inspector-idle))
+  (:methods
+   (deactivate ()
+               (none)
+               (clear *process-inspector-buffer*)
+               (reset-proc! this)
+               (set! *process-inspector* (the (pointer process-inspector) #f))
+               (call-parent-method this))
+   (get-proc () (process) (ppointer->process (-> this proc)))
+   (inspect-proc ()
+                 (object)
+                 (if (proc-valid? this)
+                   (let ((p (get-proc this))
+                         (str-len 1100))
+                     ;; fill temp buffer first to check length
+                     (temp-string-format *process-inspector-temp-buf*
+                                         "L1/L2: Scroll up~%R1/R2: Scroll down~%L3+L1: Scroll to top~%R3+R1: Scroll to bottom~%L1+R1: Scroll lock (~A)~%Left/Right: Previous/Next object~%Process: ~A~%~%heap obj ~D/~D~%~I"
+                                         (-> *process-inspector-settings* scroll-lock?)
+                                         p
+                                         (1+ (-> this obj-idx))
+                                         (-> this obj-count)
+                                         (get-heap-obj-by-idx this (-> this obj-idx)))
+                     (if (>= (length *process-inspector-temp-buf*) str-len)
+                       (copyn-string<-charp (clear *process-inspector-buffer*) (-> *process-inspector-temp-buf* data) str-len)
+                       (string<-charp (clear *process-inspector-buffer*) (-> *process-inspector-temp-buf* data))))))
+   (reset-proc! () (object) (set! (-> this proc) (the (pointer process) #f)) (reset! *process-inspector-settings*))
+   (get-heap-obj-by-idx ((idx int))
+                        (object)
+                        (let ((p (ppointer->process (-> this proc))))
+                          (when (and p (> (-> this obj-count) idx))
+                            (let ((heap-ptr (&+ (-> p heap-base) *gtype-basic-offset*)))
+                              (dotimes (i (-> this obj-count))
+                                (if (= i idx) (return (the basic heap-ptr)) (&+! heap-ptr (align16 (asize-of (the basic heap-ptr))))))
+                              (return (the basic #f))))))
+   (proc-valid? () (object) (and (-> this proc) (!= (get-proc this) *null-process*)))
+   (pad-update ((pad-idx int))
+               (object)
+               (case (-> *process-inspector-settings* scroll-lock?)
+                 ((#t)
+                  ;; unlock
+                  (cond
+                    ((and (cpad-hold? pad-idx l1)
+                          (cpad-hold? pad-idx r1)
+                          (time-elapsed? (-> *process-inspector-settings* lock-time) (seconds 1)))
+                     (false! (-> *process-inspector-settings* scroll-lock?))
+                     (set! (-> *process-inspector-settings* lock-time) 0)
+                     (set-time! (-> *process-inspector-settings* unlock-time)))
+                    ;; prev obj
+                    ((cpad-pressed? pad-idx left) (set! (-> this obj-idx) (max 0 (1- (-> this obj-idx)))))
+                    ;; next obj
+                    ((cpad-pressed? pad-idx right) (set! (-> this obj-idx) (min (1- (-> this obj-count)) (1+ (-> this obj-idx)))))))
+                 (else
+                  (cond
+                    ;; lock
+                    ((and (cpad-hold? pad-idx l1)
+                          (cpad-hold? pad-idx r1)
+                          (time-elapsed? (-> *process-inspector-settings* unlock-time) (seconds 1)))
+                     (true! (-> *process-inspector-settings* scroll-lock?))
+                     (set! (-> *process-inspector-settings* unlock-time) 0)
+                     (set-time! (-> *process-inspector-settings* lock-time)))
+                    ;; prev obj
+                    ((cpad-pressed? pad-idx left) (set! (-> this obj-idx) (max 0 (1- (-> this obj-idx)))))
+                    ;; next obj
+                    ((cpad-pressed? pad-idx right) (set! (-> this obj-idx) (min (1- (-> this obj-count)) (1+ (-> this obj-idx)))))
+                    ;; scroll up
+                    ((and (not (cpad-hold? pad-idx l3)) (cpad-pressed? pad-idx l1)) (-! (-> *process-inspector-settings* scroll-y) 3))
+                    ((cpad-pressed? pad-idx l2) (-! (-> *process-inspector-settings* scroll-y) 20))
+                    ;; scroll down
+                    ((and (not (cpad-hold? pad-idx r3)) (cpad-pressed? pad-idx r1)) (+! (-> *process-inspector-settings* scroll-y) 3))
+                    ((cpad-pressed? pad-idx r2) (+! (-> *process-inspector-settings* scroll-y) 20))
+                    ;; scroll to top
+                    ((and (cpad-hold? pad-idx l3) (cpad-pressed? pad-idx l1)) (set! (-> *process-inspector-settings* scroll-y) 0))
+                    ;; scroll to bottom
+                    ((and (cpad-hold? pad-idx r3) (cpad-pressed? pad-idx r1))
+                     (set! (-> *process-inspector-settings* scroll-y) (-> *process-inspector-settings* scroll-y-max))))))
+               (minmax! (-> *process-inspector-settings* scroll-y) 0 (-> *process-inspector-settings* scroll-y-max)))
+   (draw-debug-text ()
+                    (object)
+                    (when (and (proc-valid? this) (type-type? (-> (get-proc this) type) process-drawable))
+                      (let* ((pdraw (the process-drawable (get-proc this)))
+                             (t (-> pdraw root trans))
+                             (q (-> pdraw root quat))
+                             ;; (e (the entity-actor (-> pdraw entity)))
+                             )
+                        (add-debug-x #t (bucket-id debug-no-zbuf1) t (static-rgba 255 192 0 128))
+                        (add-debug-text-3d #t
+                                           (bucket-id debug-no-zbuf1)
+                                           (string-format "~S (pid ~D)" (-> pdraw name) (-> pdraw pid))
+                                           t
+                                           (font-color white)
+                                           (new 'static 'vector2h :y 0))
+                        (if (-> *process-inspector-settings* show-trans)
+                          (add-debug-text-3d #t
+                                             (bucket-id debug-no-zbuf1)
+                                             (vector-format :buf *temp-string* t)
+                                             t
+                                             (font-color orange)
+                                             (new 'static 'vector2h :y 12)))
+                        (if (-> *process-inspector-settings* show-quat)
+                          (add-debug-text-3d #t
+                                             (bucket-id debug-no-zbuf1)
+                                             (vector-format :buf *temp-string* q :meters #f)
+                                             t
+                                             (font-color pink)
+                                             (new 'static 'vector2h :y 24))))))
+   (draw-inspect-text ()
+                      (object)
+                      (let ((LINE_HEIGHT (the int (ceil (* (get-debug-font-scale-factor) 15)))))
+                        (pad-update this 0)
+                        (let* ((begin-y (- (* 2 LINE_HEIGHT) (* (-> *process-inspector-settings* scroll-y) LINE_HEIGHT)))
+                               (cur-y begin-y)
+                               (y-adv LINE_HEIGHT))
+                          (with-dma-buffer-add-bucket ((debug-buf (-> (current-frame) debug-buf)) (bucket-id debug-no-zbuf2))
+                            (draw-string-xy *process-inspector-buffer* debug-buf 0 cur-y (font-color default) (font-flags shadow kerning))
+                            (+! cur-y y-adv)
+                            (set! y-adv LINE_HEIGHT)
+                            (set! (-> *process-inspector-settings* scroll-y-max) ;; (max 0 (/ (- cur-y begin-y) LINE_HEIGHT)))
+                                  (max 0 (+ (the int (/ 10.0 (get-debug-font-scale-factor))) (/ (- cur-y begin-y) LINE_HEIGHT)))))))))
+  (:behaviors (process-inspector-post () (none)))
+  (:events
+   (process-inspector-event-handler (case message
+                                      (('stop 'die 'kill) (deactivate self))
+                                      (('inspect) (go process-inspector-inspect))
+                                      (('set-proc)
+                                       (let ((p (the (pointer process) (-> block param 0))))
+                                         (set! (-> self proc) p)
+                                         (set! (-> self obj-count) (count-heap-objects (ppointer->process p)))
+                                         (set! (-> self obj-idx) 0)))
+                                      ;; (('setting)
+                                      ;;  (if (>= argc 2)
+                                      ;;    (case (the symbol (-> block param 0))
+                                      ;;      (('trans)
+                                      ;;        (set! (-> self settings show-trans) (the symbol (-> block param 1)))
+                                      ;;        )
+                                      ;;      (('quat)
+                                      ;;        (set! (-> self settings show-quat) (the symbol (-> block param 1)))
+                                      ;;        )
+                                      ;;      (('get)
+                                      ;;       (case (the symbol (-> block param 1))
+                                      ;;         (('trans)
+                                      ;;           (-> self settings show-trans)
+                                      ;;           )
+                                      ;;         (('quat)
+                                      ;;           (-> self settings show-quat)
+                                      ;;           )
+                                      ;;         )
+                                      ;;       )
+                                      ;;      )
+                                      ;;    #f
+                                      ;;    )
+                                      ;;  )
+                                      )))
+  (:state-handlers (:post process-inspector-post :event process-inspector-event-handler))
+  (:states
+   (process-inspector-idle :enter
+                           (behavior ()
+                             (logior! (-> self mask) (process-mask menu)))
+                           :code
+                           (behavior ()
+                             (loop
+                               (with-dma-buffer-add-bucket ((debug-buf (-> (current-frame) debug-buf)) (bucket-id debug-no-zbuf2))
+                                 (draw-string-xy (temp-string-format *process-inspector-buffer*
+                                                                     "process-inspector: idle (current process: ~A)~%"
+                                                                     (if (-> self proc) (get-proc self) #f))
+                                                 debug-buf
+                                                 0
+                                                 0
+                                                 (font-color default)
+                                                 (font-flags shadow kerning)))
+                               (suspend))))
+   (process-inspector-inspect :trans
+                              (behavior ()
+                                (when (not (proc-valid? self))
+                                  (reset-proc! self)
+                                  (go process-inspector-idle)))
+                              :code
+                              (behavior ()
+                                (loop
+                                  (when (-> *process-inspector-settings* show-inspect)
+                                    (inspect-proc self)
+                                    (draw-inspect-text self))
+                                  (if (-> *process-inspector-settings* show-debug-text) (draw-debug-text self))
+                                  (suspend))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;
+;;; custom menu types
+;;;;;;;;;;;;;;;;;;;;;;;
+
+(deftype proc-pool-menu (debug-menu)
+  ((pool       process-tree)
+   (add-func   (function object object))
+   (proc-count string))
+  (:methods
+   (new (symbol type debug-menu-context string process-tree (function object object)) _type_)))
+
+(defmethod new proc-pool-menu ((allocation symbol)
+            (type-to-make type)
+            (ctx debug-menu-context)
+            (name string)
+            (pool process-tree)
+            (func (function object object)))
+  (let ((this (object-new allocation type-to-make (the int (-> type-to-make size)))))
+    (set! (-> this context) ctx)
+    (set! (-> this name) name)
+    (set! (-> this parent) #f)
+    (set! (-> this selected-item) #f)
+    (set! (-> this items) '())
+    (set! (-> this pool) pool)
+    (set! (-> this add-func) func)
+    (set! (-> this proc-count) (new 'debug 'string 24 (the string #f)))
+    this))
+
+(deftype proc-pool-menu-array (structure)
+  ((menus proc-pool-menu POOL_MENU_COUNT)))
+
+(define *process-menu* (the debug-menu #f))
+
+(define *process-pick-menus* (new 'debug 'proc-pool-menu-array))
+
+(define *proc-count* 0)
+
+(defun get-proc-count ((pool process-tree))
+  "Count all the processes in a process-tree."
+  (set! *proc-count* 0)
+  (let ((func (lambda ((p process)) (1+! *proc-count*)))) (iterate-process-tree pool func *null-kernel-context*))
+  *proc-count*)
+
+(defun build-pool-list ((pool-menu proc-pool-menu))
+  "Fill the process pick submenu for the given pool."
+  (debug-menu-remove-all-items pool-menu)
+  (debug-menu-append-item pool-menu
+                          (new-dm-func (temp-string-format (-> pool-menu proc-count) "Processes: ~D" (get-proc-count (-> pool-menu pool)))
+                                       #f
+                                       nothing))
+  (iterate-process-tree (-> pool-menu pool) (-> pool-menu add-func) *null-kernel-context*)
+  (set! (-> pool-menu items) (sort (-> pool-menu items) debug-menu-node<?)))
+
+(defun build-process-list ()
+  "Generate the menus for all process pools."
+  (dotimes (idx POOL_MENU_COUNT)
+    (when (nonzero? (-> *process-pick-menus* menus idx))
+      (build-pool-list (-> *process-pick-menus* menus idx)))))
+
+(defun cm-proc-flag-func ((pp (pointer process)) (msg debug-menu-msg))
+  (let ((inspector (ppointer->process *process-inspector*)))
+    (when (= msg (debug-menu-msg press))
+      (if (and *process-inspector* (= (-> *process-inspector* 0 proc) pp)) (send-event inspector 'set-proc #f))
+      (when (or (not *process-inspector*) (!= (-> *process-inspector* 0 proc) pp))
+        (send-event inspector 'set-proc pp)
+        (send-event inspector 'inspect)))
+    (if *process-inspector* (= (-> *process-inspector* 0 proc) pp) #f)))
+
+(defun cm-make-process-menu ((ctx debug-menu-context))
+  (let ((process-menu (new 'debug 'debug-menu ctx "Process menu")))
+    (let ((pick-menu-list (new 'debug 'debug-menu ctx "Pick Process menu"))
+          (active-pool (new 'debug 'proc-pool-menu ctx "Active pool" *active-pool* (make-pool-lambda 0 :show-pid #t)))
+          (target-pool (new 'debug 'proc-pool-menu ctx "Target pool" *target-pool* (make-pool-lambda 1 :show-pid #t)))
+          (entity-pool (new 'debug 'proc-pool-menu ctx "Entity pool" *entity-pool* (make-pool-lambda 2 :with-entities #t)))
+          (pc-pool (new 'debug 'proc-pool-menu ctx "PC pool" *pc-pool* (make-pool-lambda 3 :show-pid #t))))
+      (set! *process-menu* pick-menu-list)
+      (set! (-> *process-pick-menus* menus 0) active-pool)
+      (set! (-> *process-pick-menus* menus 1) target-pool)
+      (set! (-> *process-pick-menus* menus 2) entity-pool)
+      (set! (-> *process-pick-menus* menus 3) pc-pool)
+      (debug-menu-append-item pick-menu-list (new-dm-submenu "*active-pool*" active-pool))
+      (debug-menu-append-item pick-menu-list (new-dm-submenu "*target-pool*" target-pool))
+      (debug-menu-append-item pick-menu-list (new-dm-submenu "*entity-pool*" entity-pool))
+      (debug-menu-append-item pick-menu-list (new-dm-submenu "*pc-pool*" pc-pool))
+      (debug-menu-append-item process-menu (new-dm-submenu "Pick Process" *process-menu*)))
+    (debug-menu-append-item process-menu (new-dm-func "Refresh" #f build-process-list))
+    (debug-menu-append-item process-menu
+                            (new-dm-func "Start Inspector" #f (lambda () (if (not *process-inspector*) (process-spawn process-inspector #f)))))
+    (debug-menu-append-item process-menu
+                            (new-dm-func "Stop Inspector"
+                                         #f
+                                         (lambda ()
+                                           (if *process-inspector* (send-event (ppointer->process *process-inspector*) 'die)))))
+    (debug-menu-append-item process-menu
+                            (new-dm-flag "Show Inspect Text"
+                                         #f
+                                         (lambda (arg (msg debug-menu-msg))
+                                           (if (= msg (debug-menu-msg press)) (not! (-> *process-inspector-settings* show-inspect)))
+                                           (-> *process-inspector-settings* show-inspect))))
+    (debug-menu-append-item process-menu
+                            (new-dm-flag "Show Debug Text"
+                                         #f
+                                         (lambda (arg (msg debug-menu-msg))
+                                           (if (= msg (debug-menu-msg press)) (not! (-> *process-inspector-settings* show-debug-text)))
+                                           (-> *process-inspector-settings* show-debug-text))))
+    (debug-menu-append-item process-menu
+                            (new-dm-flag "Show Trans"
+                                         #f
+                                         (lambda (arg (msg debug-menu-msg))
+                                           (if (= msg (debug-menu-msg press)) (not! (-> *process-inspector-settings* show-trans)))
+                                           (-> *process-inspector-settings* show-trans))))
+    (debug-menu-append-item process-menu
+                            (new-dm-flag "Show Quat"
+                                         #f
+                                         (lambda (arg (msg debug-menu-msg))
+                                           (if (= msg (debug-menu-msg press)) (not! (-> *process-inspector-settings* show-quat)))
+                                           (-> *process-inspector-settings* show-quat))))
+    ;; (debug-menu-append-item process-menu (new-dm-func "Go to process" #f
+    ;;                                         (lambda ()
+    ;;                                           (unless (-> *entity-debug-inspect* entity) (return #f))
+    ;;                                           (let ((tf (new 'stack 'transformq)))
+    ;;                                             (vector-copy! (-> tf trans) (-> *entity-debug-inspect* entity trans))
+    ;;                                             (quaternion-identity! (-> tf quat))
+    ;;                                             (vector-identity! (-> tf scale))
+    ;;                                             (send-event *camera* 'teleport-to-transformq tf)
+    ;;                                             ))))
+    (new-dm-submenu "Process Inspector" process-menu)))
+
+(defun custom-menu-context-make-default-menus ((ctx debug-menu-context))
+  (debug-menu-make-from-template ctx
+                                 '(main-menu "Custom Menu"
+                                            ;; (menu
+                                            ;;   "Load user file"
+                                            ;;   (function "bot-debug.gc" #f ,(lambda () (ml "bot-debug")))
+                                            ;;   )
+                                            (menu "Sound"
+                                                  (function "Mute sfx" #f ,(lambda () (set! (-> *setting-control* user-default sfx-volume) 0.0) (none)))
+                                                  (function "Mute ambient" #f ,(lambda () (set! (-> *setting-control* user-default ambient-volume) 0.0) (none)))
+                                                  (function "Mute music" #f ,(lambda () (set! (-> *setting-control* user-default music-volume) 0.0) (none)))
+                                                  (function "Mute dialog" #f ,(lambda () (set! (-> *setting-control* user-default dialog-volume) 0.0) (none)))
+                                                  (float-var "sfx-volume"
+                                                             #f
+                                                             ,(lambda ((arg0 object) (arg1 debug-menu-msg) (arg2 float))
+                                                               (cond
+                                                                 ((= arg1 (debug-menu-msg press))
+                                                                  (if (and *setting-control* (nonzero? *setting-control*)) (set! (-> *setting-control* user-default sfx-volume) arg2)))
+                                                                 ((or (not *setting-control*) (zero? *setting-control*)) 0.0)
+                                                                 (else (-> *setting-control* user-default sfx-volume))))
+                                                             2
+                                                             (new 'static 'bfloat :data 0.01)
+                                                             #t
+                                                             0
+                                                             1
+                                                             0)
+                                                  (float-var "ambient-volume"
+                                                             #f
+                                                             ,(lambda ((arg0 object) (arg1 debug-menu-msg) (arg2 float))
+                                                               (cond
+                                                                 ((= arg1 (debug-menu-msg press))
+                                                                  (if (and *setting-control* (nonzero? *setting-control*)) (set! (-> *setting-control* user-default ambient-volume) arg2)))
+                                                                 ((or (not *setting-control*) (zero? *setting-control*)) 0.0)
+                                                                 (else (-> *setting-control* user-default ambient-volume))))
+                                                             2
+                                                             (new 'static 'bfloat :data 0.01)
+                                                             #t
+                                                             0
+                                                             1
+                                                             0)
+                                                  (float-var "music-volume"
+                                                             #f
+                                                             ,(lambda ((arg0 object) (arg1 debug-menu-msg) (arg2 float))
+                                                               (cond
+                                                                 ((= arg1 (debug-menu-msg press))
+                                                                  (if (and *setting-control* (nonzero? *setting-control*)) (set! (-> *setting-control* user-default music-volume) arg2)))
+                                                                 ((or (not *setting-control*) (zero? *setting-control*)) 0.0)
+                                                                 (else (-> *setting-control* user-default music-volume))))
+                                                             2
+                                                             (new 'static 'bfloat :data 0.01)
+                                                             #t
+                                                             0
+                                                             1
+                                                             0)
+                                                  (float-var "dialog-volume"
+                                                             #f
+                                                             ,(lambda ((arg0 object) (arg1 debug-menu-msg) (arg2 float))
+                                                               (cond
+                                                                 ((= arg1 (debug-menu-msg press))
+                                                                  (if (and *setting-control* (nonzero? *setting-control*)) (set! (-> *setting-control* user-default dialog-volume) arg2)))
+                                                                 ((or (not *setting-control*) (zero? *setting-control*)) 0.0)
+                                                                 (else (-> *setting-control* user-default dialog-volume))))
+                                                             2
+                                                             (new 'static 'bfloat :data 0.01)
+                                                             #t
+                                                             0
+                                                             1
+                                                             0)
+                                                  (function "Reload Banks" #f sound-bank-reload))
+                                            (menu "Mode"
+                                                  (function "normal" #f ,(lambda () (send-event *target* 'end-mode)))
+                                                  (function "racer"
+                                                            #f
+                                                            ,(lambda ()
+                                                              (if (not *target*) (start 'debug (get-current-continue-forced *game-info*)))
+                                                              (send-event *target* 'change-mode 'racer #f)))
+                                                  (function "board"
+                                                            #f
+                                                            ,(lambda ()
+                                                              (if (not *target*) (start 'debug (get-current-continue-forced *game-info*)))
+                                                              (logior! (-> *game-info* features) (game-feature board))
+                                                              (logior! (-> *game-info* debug-features) (game-feature board))
+                                                              (send-event *target* 'change-mode 'board #f)))
+                                                  (function "mech"
+                                                            #f
+                                                            ,(lambda ()
+                                                              (if (not *target*) (start 'debug (get-current-continue-forced *game-info*)))
+                                                              (send-event *target* 'change-mode 'mech #f)))
+                                                  (function "gun"
+                                                            #f
+                                                            ,(lambda ()
+                                                              (if (not *target*) (start 'debug (get-current-continue-forced *game-info*)))
+                                                              (logior! (-> *game-info* features) (game-feature gun))
+                                                              (logior! (-> *game-info* debug-features) (game-feature gun))
+                                                              (send-event *target* 'change-mode 'gun #f (pickup-type none))))
+                                                  (function "darkjak"
+                                                            #f
+                                                            ,(lambda ()
+                                                              (if (not *target*) (start 'debug (get-current-continue-forced *game-info*)))
+                                                              (logior! (-> *game-info* features) (game-feature darkjak))
+                                                              (logior! (-> *game-info* debug-features) (game-feature darkjak))
+                                                              (send-event *target* 'change-mode 'darkjak #f (darkjak-stage force-on active))))
+                                                  (function "indax"
+                                                            #f
+                                                            ,(lambda ()
+                                                              (if (not *target*) (start 'debug (get-current-continue-forced *game-info*)))
+                                                              (send-event *target* 'change-mode 'indax #f))))
+                                            (flag "Game"
+                                                  #f
+                                                  ,(lambda ((arg0 object) (arg1 debug-menu-msg))
+                                                    (when (= arg1 (debug-menu-msg press))
+                                                      (let ((v1-3 (-> *game-info* mode)))
+                                                        (set! (-> *game-info* mode)
+                                                              (cond
+                                                                ((= v1-3 'play) 'debug)
+                                                                ((= v1-3 'debug) 'play)
+                                                                (else (-> *game-info* mode))))))
+                                                    (= (-> *game-info* mode) 'play)))
+                                            (flag "Target Stats" *stats-target* dm-boolean-toggle-pick-func)
+                                            (function "Reset Actors" #f ,(lambda () (reset-actors 'debug) (none)))
+                                            (menu "Actor Marks"
+                                                  (flag "off" #f dm-actor-marks-pick-func)
+                                                  (flag "alive entities" #t dm-actor-marks-pick-func)
+                                                  (flag "all entities" full dm-actor-marks-pick-func)
+                                                  (flag "processes" process dm-actor-marks-pick-func))
+                                            (flag "Target"
+                                                  #f
+                                                  ,(lambda ((arg0 object) (arg1 debug-menu-msg))
+                                                    (when (= arg1 (debug-menu-msg press))
+                                                      (if *target* (stop 'debug) (start 'debug (get-current-continue-forced *game-info*))))
+                                                    *target*))
+                                            (flag "Bug Report" *display-bug-report* dm-boolean-toggle-pick-func)
+                                            (flag "Load State" *display-level-border* dm-boolean-toggle-pick-func)
+                                            (flag "Heap Status" *display-heap-status* dm-boolean-toggle-pick-func)
+                                            (menu "PC Settings"
+                                                  (menu "Framerate"
+                                                        (flag "30" 30 dm-frame-rate-pick-func)
+                                                        (flag "50" 50 dm-frame-rate-pick-func)
+                                                        (flag "60" 60 dm-frame-rate-pick-func)
+                                                        (flag "75" 75 dm-frame-rate-pick-func)
+                                                        (flag "120" 120 dm-frame-rate-pick-func)
+                                                        (flag "144" 144 dm-frame-rate-pick-func)
+                                                        (flag "165" 165 dm-frame-rate-pick-func)
+                                                        (flag "240" 240 dm-frame-rate-pick-func))
+                                                  (flag "V-Sync" #f ,(dm-lambda-boolean-flag (-> *pc-settings* vsync?)))
+                                                  (flag "PS2 actor vis" #f ,(dm-lambda-boolean-flag (-> *pc-settings* ps2-actor-vis?)))
+                                                  (flag "Display actor counts" *display-actor-counts* dm-boolean-toggle-pick-func)
+                                                  (flag "Display git commit" *display-sha* dm-boolean-toggle-pick-func)
+                                                  (function "Reset" #f ,(lambda () (reset *pc-settings* #t)))
+                                                  (function "Save" #f ,(lambda () (commit-to-file *pc-settings*)))
+                                                  (function "Load" #f ,(lambda () (load-settings *pc-settings*))))))
+  ctx)
+
+(define *custom-menu-context* (new 'debug 'debug-menu-context))
+
+(custom-menu-context-make-default-menus *custom-menu-context*)
+
+(when (-> *custom-menu-context* root-menu)
+  (debug-menu-append-item (-> *custom-menu-context* root-menu) (cm-make-process-menu *custom-menu-context*))
+  (debug-menu-append-item (-> *custom-menu-context* root-menu) (debug-menu-make-entity-menu *custom-menu-context*))
+  (debug-menu-append-item (-> *custom-menu-context* root-menu) (debug-menu-make-regions-menu *custom-menu-context*))
+  (debug-menu-append-item (-> *custom-menu-context* root-menu)
+                          (debug-menu-make-collision-renderer-menu *custom-menu-context*)))
+
+;; replace some functions to enable new menu
+;; l3 + select (replaces popup-menu)
+(defun menu-respond-to-pause ()
+  (case *master-mode*
+    (('menu)
+     (cond
+       ((and (cpad-hold? 0 l3) (cpad-hold? 0 select))
+        (debug-menu-context-send-msg *popup-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *debug-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        ; (debug-menu-context-send-msg *editable-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *custom-menu-context* (debug-menu-msg activate) (debug-menu-dest activation)))
+       ((and (cpad-hold? 1 start) *editable*)
+        ; (debug-menu-context-send-msg *editable-menu-context* (debug-menu-msg activate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *debug-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *popup-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *custom-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation)))
+       ((and (cpad-hold? 0 l3) (cpad-hold? 0 start))
+        (debug-menu-context-send-msg *debug-menu-context* (debug-menu-msg activate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *popup-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        ; (debug-menu-context-send-msg *editable-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+        (debug-menu-context-send-msg *custom-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation)))))
+    (else
+     (debug-menu-context-send-msg *debug-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+     (debug-menu-context-send-msg *popup-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+     ; (debug-menu-context-send-msg *editable-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))
+     (debug-menu-context-send-msg *custom-menu-context* (debug-menu-msg deactivate) (debug-menu-dest activation))))
+  #f)
+
+(defun *menu-hook* ()
+  (debug-menus-handler *debug-menu-context*)
+  ;; (debug-menus-handler *popup-menu-context*)
+  (debug-menus-handler *custom-menu-context*))
