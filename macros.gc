@@ -62,6 +62,11 @@
   `(lambda ((p process))
     ,@body))
 
+(defmacro anon-behavior (type bindings &rest body)
+  `(lambda :behavior ,type
+    ,bindings
+    ,@body))
+
 (define *pid-proc* (the process #f))
 
 (define *pid* 0)
@@ -74,13 +79,13 @@
   *pid-proc*)
 
 (defmacro actor-inspect (name)
-  `(inspect (process-by-ename ,name)))
+  `(inspect! (process-by-ename ,name)))
 
 (defmacro get-actor (&key (as process-drawable) name)
   `(the ,as (process-by-ename ,name)))
 
-(defmacro get-taskman (&key (as task-manager) &key (proc (the process #f)))
-  `(the ,as (command-get-process '*task-manager* ,proc)))
+(defmacro get-proc (&key (pool *active-pool*) &key (as process-drawable) name)
+  `(the ,as (process-by-name ,name ,pool)))
 
 (define *global-search-type* (the type #f))
 
@@ -106,3 +111,16 @@
 
 (defmacro awhen-proc (name &rest body)
   `(awhen (process-by-name ,name *active-pool*) ,@body))
+
+(defmacro #when-game (version &rest body)
+  `(#when (eq? *game-version* ,version)
+    ,@body))
+
+(#when (or (eq? *game-version* 'jak2) (eq? *game-version* 'jak3))
+  (defmacro get-taskman (&key (as task-manager) &key (proc (the process #f)))
+    `(the ,as (command-get-process '*task-manager* ,proc)))
+  (defmacro load-levels (levels)
+    (with-gensyms (loaded)
+      (set! loaded '())
+      `(dotimes (i (-> *level* length))
+        ()))))

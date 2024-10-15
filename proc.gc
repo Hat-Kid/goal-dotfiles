@@ -2,13 +2,11 @@
 ;; jak 1
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(when (= *game-version* 'jak1)
-  (spawn-proc
-    :name "dupe"
+(#when-game 'jak1
+  (spawn-proc :name "dupe"
     :run #f
     (format *stdcon* "hint #x~X~%~A~%~A~%" *hint-semaphore* *hint-semaphore* (ppointer->process *hint-semaphore*)))
-  (spawn-proc
-    :loop #f
+  (spawn-proc :loop #f
     :run #f
     (let ((time (current-time))
           (proc (the process-drawable (process-by-ename "fishermans-boat-2"))))
@@ -24,9 +22,8 @@
 ;; jak 2
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(when (= *game-version* 'jak2)
-  (spawn-proc
-    :name "board-test"
+(#when-game 'jak2
+  (spawn-proc :name "board-test"
     :run #f
     (with-target (format *stdcon* "rotyv ~f~%" (-> it board trotyv))
                  (add-debug-text-sphere #t
@@ -35,8 +32,7 @@
                                         (meters 0.2)
                                         "board"
                                         (static-rgba 0 #xff 0 #x80))))
-  (spawn-proc
-    :name "hosehead-dbg"
+  (spawn-proc :name "hosehead-dbg"
     :run #f
     (awhen (the hosehead (process-by-ename "hosehead-9"))
            (add-debug-x #t (bucket-id debug-no-zbuf2) (-> it jump-point) (static-rgba #xff 0 #xff #x80))
@@ -46,12 +42,10 @@
                    (- (-> it root trans y) (-> it jump-point y))
                    (- (-> it root trans y) (-> it jump-point y)))
            (format-trans *stdcon* (-> it root trans))))
-  (spawn-proc
-    :name "excitement"
+  (spawn-proc :name "excitement"
     :run #f
     (set-setting! 'sound-excitement 'abs 0.9 0))
-  (spawn-proc
-    :name "smol"
+  (spawn-proc :name "smol"
     :run #f
     (with-target (let ((dax (the sidekick (ppointer->process (-> it sidekick))))
                        (gun (the gun (ppointer->process (-> it gun gun)))))
@@ -62,8 +56,7 @@
                      (vector+! (-> dax root trans) (-> dax root trans) (static-vectorm 0 5 0))
                      (set-vector! (-> *target* control sidekick-root parent bone scale) 0.4 0.4 0.4 0.4))
                    (if gun (set-vector! (-> gun root scale) 0.4 0.4 0.4 0.4)))))
-  (spawn-proc
-    :name "djak-trigger"
+  (spawn-proc :name "djak-trigger"
     :run #f
     (define *trigger-darjak-long-anim?* #f)
     (when *target*
@@ -79,8 +72,7 @@
           (send-event *target* 'change-mode 'darkjak #f (darkjak-stage active))
           (false! *trigger-darjak-long-anim?*)))
       (suspend)))
-  (spawn-proc
-    :loop #f
+  (spawn-proc :loop #f
     :run #f
     (let ((time (current-time))
           (manipy (-> (-> *hud-speedometer* 0) icons 0 icon 0)))
@@ -100,8 +92,7 @@
                ;; (quaternion-rotate-z! (-> it root quat) (-> it root quat) (degrees (* 45.0 (seconds-per-frame))))
                (suspend)))
       (deactivate self)))
-  (spawn-proc
-    :loop #f
+  (spawn-proc :loop #f
     :run #f
     (let ((kor (process-spawn manipy
                               :init
@@ -132,20 +123,17 @@
                                    0
                                    :to
                                    (-> kor 0))))))))
-  (spawn-proc
-    :name "kill-mask"
+  (spawn-proc :name "kill-mask"
     :run #f
     (when (task-closed? "atoll-battle-resolution")
       (aif (entity-by-name "spyder-53") (set! (-> (the entity-actor it) extra kill-mask) (task-mask task3)))
       (aif (entity-by-name "spyder-2") (set! (-> (the entity-actor it) extra kill-mask) (task-mask task3)))
       (aif (entity-by-name "spyder-4") (set! (-> (the entity-actor it) extra kill-mask) (task-mask task3)))))
-  (spawn-proc
-    :name "rider"
+  (spawn-proc :name "rider"
     :run #f
     (aif (the rift-rider (process-by-ename "rift-rider-5"))
          (format *stdcon* "rift rider: ~m ~m ~m~%" (-> it root trans x) (-> it root trans y) (-> it root trans z))))
-  (spawn-proc
-    :name "endless"
+  (spawn-proc :name "endless"
     :stack 512
     :run #f
     (define POINTA (static-vectorm 4462.1 13.734 -4912.1))
@@ -185,8 +173,7 @@
            (vector-copy! (-> *math-camera* prev-trans) (-> tq trans))
            (vector-copy! (-> *math-camera* trans-other) (-> tq trans))
            (vector-copy! (-> *camera-combiner* trans) (-> tq trans)))))))
-  (spawn-proc
-    :name "water"
+  (spawn-proc :name "water"
     :run #f
     (if *target*
       (let ((water (new 'stack 'water-info)))
@@ -201,8 +188,7 @@
         (if (and (logtest? (water-flags event) (-> water flags)) (logtest? (water-flags touch-water) (-> arg0 flags)))
           (send-event *target* 'water water (-> arg2 process)))
         (water-info-init! (-> *target* control) water (collide-action solid semi-solid)))))
-  (spawn-proc
-    :loop #f
+  (spawn-proc :loop #f
     :run #f
     (let ((ocean (new 'static 'region :id 1000 :on-inside '(water ocean 0 (swim wade))))
           (tree (new 'static 'array drawable-region-tree-prim 1)))
@@ -216,23 +202,41 @@
 ;; jak 3
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(when (= *game-version* 'jak3)
-  (spawn-proc
-    :name "cur-vehicle"
+(#when-game 'jak3
+  (spawn-proc :name "kleever-manipy"
+    :loop #f
+    :run #f
+    (kill-by-name "kleever-quest" *active-pool*)
+    (let ((trans (anon-behavior manipy () (debug-print-channels (-> self skel) (the symbol *stdcon*))))
+          (kleever (the manipy
+                        (ppointer->process (process-spawn manipy
+                                                          :init
+                                                          manipy-init
+                                                          (target-pos 0)
+                                                          #f
+                                                          (art-group-get-by-name *level* "skel-kleever-highres" (the (pointer level) #f))
+                                                          #f
+                                                          0
+                                                          #f
+                                                          :name "kleever-quest"
+                                                          :from
+                                                          *debug-dead-pool*
+                                                          :stack-size #x18000)))))
+      (send-event kleever 'anim-mode 'loop)
+      (send-event kleever 'art-joint-anim "kleever-highres-idle-city-chase")
+      (send-event kleever 'trans-hook trans)))
+  (spawn-proc :name "cur-vehicle"
     :run #f
     (with-target (when (and (nonzero? (-> it pilot)) (focus-test? it pilot))
                    (format *stdcon* "pilot: ~S~%" (enum->string vehicle-type (-> *game-info* current-vehicle))))))
-  (spawn-proc
-    :name "max-storm"
+  (spawn-proc :name "max-storm"
     :run #f
     (awhen (the desert-dust-storm (handle->process (-> *game-info* dust-storm))) (set! (-> it intensity) 5.0)))
-  (spawn-proc
-    :name "rbody"
+  (spawn-proc :name "rbody"
     :run #f
     (awhen (the vol-stone-lid (get-actor "vol-stone-lid-6"))
            (format *stdcon* "stone-lid:~%force-pos ~`vector`P~%" (-> it player-force-position))))
-  (spawn-proc
-    :name "jg-test"
+  (spawn-proc :name "jg-test"
     :loop #f
     :run #f
     (let ((func (lambda :behavior target ()
@@ -241,8 +245,7 @@
                   (suspend-for (seconds 15)
                     (draw-joint-spheres self)))))
       (with-target (run-now-in-process it func))))
-  (spawn-proc
-    :name "marauder-nan-dbg"
+  (spawn-proc :name "marauder-nan-dbg"
     :run #f
     (when (get-taskman)
       (with-target (let ((iter (lambda ((p process))
@@ -257,8 +260,7 @@
                                                      #f
                                                      (the rgba -1)))))))
                      (iterate-process-tree (get-taskman) iter *null-kernel-context*)))))
-  (spawn-proc
-    :name "robo-hover-nan"
+  (spawn-proc :name "robo-hover-nan"
     :run #f
     (let ((iter (lambda ((p process))
                   (when (= (-> p type) robo-hover)
@@ -266,15 +268,13 @@
                       (format 0 "~A~%~f ~f ~f ~f~%" r (-> r wrist-quat 0 x) (-> r wrist-quat 0 y) (-> r wrist-quat 0 z) (-> r wrist-quat 0 w))
                       (format 0 "~f ~f ~f ~f~%" (-> r wrist-quat 1 x) (-> r wrist-quat 1 y) (-> r wrist-quat 1 z) (-> r wrist-quat 1 w)))))))
       (iterate-process-tree *active-pool* iter *null-kernel-context*)))
-  (spawn-proc
-    :name "rbody-bonk-dbg"
+  (spawn-proc :name "rbody-bonk-dbg"
     :run #f
     (let ((iter (lambda ((p process))
                   (when (= (-> p type) vol-stone-lid)
                     (let ((v (the vol-stone-lid p))) (debug-print-info (-> v rbody) 0))))))
       (iterate-process-tree *active-pool* iter *null-kernel-context*)))
-  (spawn-proc
-    :name "bombbot-bomb-dbg"
+  (spawn-proc :name "bombbot-bomb-dbg"
     :run #f
     (let ((iter (lambda ((p process))
                   (when (= (-> p type) bombbot-bomb)
@@ -284,8 +284,7 @@
                      (let ((b (the bombbot p))) (format *stdcon* "~A~%~`vector`P~%" b (-> b target-pos)))))))
       (iterate-process-tree *active-pool* iter *null-kernel-context*)
       (iterate-process-tree *active-pool* iter1 *null-kernel-context*)))
-  (spawn-proc
-    :name "wasp-dbg"
+  (spawn-proc :name "wasp-dbg"
     :run #f
     (let ((iter (lambda ((p process))
                   (when (= (-> p type) mh-wasp)
@@ -301,8 +300,7 @@
                                       #f
                                       (the rgba -1)))))))
       (iterate-process-tree *active-pool* iter *null-kernel-context*)))
-  (spawn-proc
-    :name "bbush-egg-spider-dbg"
+  (spawn-proc :name "bbush-egg-spider-dbg"
     :run #f
     (let ((hud-score (the hud-spider-killed (process-by-type *active-pool* hud-spider-killed))))
       (awhen hud-score
@@ -312,8 +310,7 @@
                      (-> it values 0 target)
                      (-> *game-info* score)
                      (-> *game-info* score)))))
-  (spawn-proc
-    :name "eyes-dbg"
+  (spawn-proc :name "eyes-dbg"
     :run #f
     (format *stdcon* "eyes-debug~%")
     (dotimes (i LEVEL_MAX)
@@ -342,8 +339,7 @@
 ;; all
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(spawn-proc
-  :name "draw-tris"
+(spawn-proc :name "draw-tris"
   :stack 512
   :mask (menu)
   :run #f
@@ -351,15 +347,13 @@
          (mesh (-> (res-lump-struct (-> proc draw art-group data 0 extra) 'collide-mesh-group (array collide-mesh)) 0)))
     (debug-draw-tris mesh proc (-> mesh joint-id))))
 
-(spawn-proc
-  :name "toggle-decompressor"
+(spawn-proc :name "toggle-decompressor"
   :run #f
   (format *stdcon* "*use-new-decompressor* ~A~%" *use-new-decompressor*)
   (when (cpad-pressed? 0 l3)
     (not! *use-new-decompressor*)))
 
-(spawn-proc
-  :loop #f
+(spawn-proc :loop #f
   :run #f
   (let ((time (current-time)))
     (while (<= (- (current-time) time) (seconds 5))
@@ -374,8 +368,7 @@
       (suspend))
     (deactivate self)))
 
-(spawn-proc
-  :name "speedo"
+(spawn-proc :name "speedo"
   :run #f
   (awhen *target*
          (let ((xz-vel (new-stack-vector0))
@@ -383,8 +376,7 @@
            (vector-! xz-vel (-> *target* control transv) (vector-float*! xz-vel (-> *target* control dynam gravity-normal) y-vel))
            (format *stdcon* "xz-vel: ~f~%" (vector-length xz-vel)))))
 
-(spawn-proc
-  :name "cam-dir"
+(spawn-proc :name "cam-dir"
   :run #f
   (with-target (add-debug-vector #t
                                  (bucket-id debug-no-zbuf1)
@@ -393,8 +385,7 @@
                                  (meters 2)
                                  (static-rgba #xff #xff 0 #x80))))
 
-(spawn-proc
-  :name "target-dir"
+(spawn-proc :name "target-dir"
   :run #f
   (with-target (let ((dir (new-stack-vector0))
                      (off (static-vector (meters 1) 0.0 0.0 1.0)))
@@ -409,26 +400,22 @@
                                    (meters 2)
                                    (static-rgba #xff #xff 0 #x80)))))
 
-(spawn-proc
-  :name "target-dist"
+(spawn-proc :name "target-dist"
   :run #f
   (let ((vec (static-vector 0.0 0.0 0.0 1.0)))
     (format *stdcon* "proc dist: ~f~%" (/ (vector-vector-distance (target-pos 0) vec) (meters 1)))))
 
-(spawn-proc
-  :loop #f
+(spawn-proc :loop #f
   :run #f
   (suspend-for (seconds 4)
     (format 0 "number 1 ~D number 2 ~D~%" (current-time) (- (current-time) time) (seconds 4)))
   (format 0 "time is up, we will die~%"))
 
-(spawn-proc
-  :name "milli"
+(spawn-proc :name "milli"
   :run #f
   (let ((time (current-time))) (format *stdcon* "curtime ~D ~es~%" (current-time) (current-time))))
 
-(spawn-proc
-  :stack 512
+(spawn-proc :stack 512
   :loop #f
   :run #f
   (with-target
@@ -445,8 +432,7 @@
       (suspend)
       (send-event *camera* 'teleport-to-transformq tq))))
 
-(spawn-proc
-  :loop #f
+(spawn-proc :loop #f
   :run #f
   (iterate-process-tree *entity-pool*
                         (lambda ((proc process))
@@ -462,9 +448,8 @@
 ;; tfl
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(when (= *game-version* 'jak1)
-  (spawn-proc
-    :name "cam-dbg"
+(#when-game 'jak1
+  (spawn-proc :name "cam-dbg"
     :run #f
     (awhen (the camera-slave (ppointer->process (-> *camera* slave 0)))
            (format *stdcon*
@@ -472,8 +457,7 @@
                    (/ (- (vector-length (-> it view-flat)) (-> it string-min-val z)) (- (-> it string-max-val z) (-> it string-min-val z)))
                    (- (vector-length (-> it view-flat)) (-> it string-min-val z))
                    (vector-length (-> it view-flat)))))
-  (spawn-proc
-    :name "buzzer-dbg"
+  (spawn-proc :name "buzzer-dbg"
     :run #f
     (let* ((task (game-task crystalc-buzzer))
            (count (buzzer-count *game-info* task))
@@ -483,8 +467,7 @@
       (format *stdcon* "reminder #b~b (~D)~%" reminder reminder)
       (dotimes (i 7)
         (format *stdcon* "~D: ~D ~A~%" (+ task (* i 65536)) i (logtest? reminder (ash 1 i))))))
-  (spawn-proc
-    :name "lowreskui-dbg"
+  (spawn-proc :name "lowreskui-dbg"
     :run #f
     (let* ((task (game-task tfl-lowreskui))
            (count (lowreskui-collected-count))
@@ -516,8 +499,7 @@
           (1-! (-> *target* fact buzzer))
           (1-! (-> *game-info* buzzer-total))
           (birth! e)))))
-  (spawn-proc
-    :name "flags"
+  (spawn-proc :name "flags"
     :run #f
     (awhen *target*
            (format *stdcon*
@@ -525,8 +507,7 @@
                    (begin
                      (bit-enum->string state-flags (-> it state-flags) (clear *temp-string2*))
                      *temp-string2*))))
-  (spawn-proc
-    :name "lurker-quat"
+  (spawn-proc :name "lurker-quat"
     :loop #f
     :run #f
     (let ((time (current-time))
@@ -540,14 +521,12 @@
                ;; (quaternion-rotate-y! (-> it cshape quat) (-> it cshape quat) (degrees (* 45.0 (seconds-per-frame))))
                ;; (quaternion-rotate-z! (-> it cshape quat) (-> it cshape quat) (degrees (* 45.0 (seconds-per-frame))))
                (suspend)))))
-  (spawn-proc
-    :name "hint-test"
+  (spawn-proc :name "hint-test"
     :run #f
     (format *stdcon* "tfl-hint-playing? ~A~%" *tfl-hint-playing?*)
     (format *stdcon* "tfl-hint-semaphore ~A~%" (ppointer->process *tfl-hint-semaphore*))
     (awhen (the tfl-hint (process-by-ename "energy-bay-tfl-hint-00")) (format *stdcon* "hint ~A~%" it)))
-  (spawn-proc
-    :loop #f
+  (spawn-proc :loop #f
     :run #f
     (let ((time (current-time)))
       (when (not (play-tfl-hint "DS017.wav" 35 #t))
@@ -559,8 +538,7 @@
           (format *stdcon* "tfl-hint-playing? ~A ~D~%" *tfl-hint-playing?* (- (current-time) time))
           (suspend))
         (send-event box 'die))))
-  (spawn-proc
-    :name "arc-test"
+  (spawn-proc :name "arc-test"
     :run #f
     (let ((proc (the process-drawable (process-by-ename "crystalc-electric-arc-01"))))
       ;; (logclear! (-> (the process-drawable (process-by-ename "crystalc-electric-arc-01")) draw status) (draw-status needs-clip))
