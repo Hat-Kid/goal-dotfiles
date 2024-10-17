@@ -319,6 +319,18 @@ Custom menu with a process inspector. Replaces popup menu (L3 + Select).
     (when (nonzero? (-> *process-pick-menus* menus idx))
       (build-pool-list (-> *process-pick-menus* menus idx)))))
 
+; (defun cm-proc-flag-func ((pp (pointer process)) (msg debug-menu-msg))
+;   (let ((inspector (the process-inspector (ppointer->process *process-inspector*))))
+;     (when (= msg (debug-menu-msg press))
+;       (when inspector
+;         (process-mask-clear! (-> inspector mask) menu)
+;         (if (= (-> inspector proc) pp) (send-event inspector 'set-proc #f))
+;         (when (or (not (-> inspector proc)) (!= (-> inspector proc) pp))
+;           (send-event inspector 'set-proc pp)
+;           (send-event inspector 'inspect))
+;         (process-mask-set! (-> inspector mask) menu))
+;       (if inspector (!= (-> inspector proc) pp)))))
+
 (defun cm-proc-flag-func ((pp (pointer process)) (msg debug-menu-msg))
   (let ((inspector (ppointer->process *process-inspector*)))
     (when (= msg (debug-menu-msg press))
