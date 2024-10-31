@@ -27,8 +27,7 @@
            (if ,loop (loop   ,@body   (suspend)) (begin   ,@body))))))))
 
 (defmacro proc-sus (s &key (run #t) &rest body)
-  `(spawn-proc
-    :name #f
+  `(spawn-proc :name #f
     :loop #f
     :run ,run
     (suspend-for (seconds ,s)
@@ -111,6 +110,9 @@
 
 (defmacro awhen-proc (name &rest body)
   `(awhen (process-by-name ,name *active-pool*) ,@body))
+
+(defmacro or-enum (val type &rest elts)
+  `(or ,@(apply (lambda (enum-val) `(= ,val (,type ,enum-val))) elts)))
 
 (defmacro #when-game (version &rest body)
   `(#when (eq? *game-version* ,version)
