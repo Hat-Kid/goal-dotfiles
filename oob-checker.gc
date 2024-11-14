@@ -1,0 +1,245 @@
+(defconstant MAX_EYE_TRACE_PROBES 40)
+
+(defconstant MAX_EYE_TRACE_PROBES_PER_DIR 5)
+
+(defproc oob-checker (process)
+  ((settings                oob-checker-settings)
+   (oob?                    symbol)
+   (eye-trace-probe-results symbol MAX_EYE_TRACE_PROBES)
+   (eye-trace-results       symbol 8))
+  (:types
+   (oob-checker-settings
+     (structure)
+     ((below-trace-height float) (eye-trace-length float) (eye-trace-below-probe-dist float) (debug-draw? symbol))
+     (:globals ((*oob-checker-settings* oob-checker-settings) (new 'static 'oob-checker-settings)))
+     (:methods
+      (reset! ()
+              (object)
+              (set! (-> this below-trace-height) (meters 1000))
+              (set! (-> this eye-trace-length) (meters 100000))
+              (set! (-> this eye-trace-below-probe-dist) (meters 10))
+              (true! (-> this debug-draw?))))))
+  (:globals
+   ((*oob-checker* oob-checker) (the oob-checker #f)))
+  (:init
+   ()
+   (stack-size-set! (-> self main-thread) 1024)
+   (set! *oob-checker* self)
+   (reset! *oob-checker-settings*)
+   (set! (-> self settings) *oob-checker-settings*)
+   (false! (-> self oob?))
+   (dotimes (i MAX_EYE_TRACE_PROBES) (false! (-> self eye-trace-probe-results i)))
+   (dotimes (i 8) (false! (-> self eye-trace-results i)))
+   (go-virtual idle))
+  ; (:behaviors)
+  (:methods
+   (deactivate () (none) (set! *oob-checker* (the oob-checker #f)) (call-parent-method this))
+   (relocate ((off int)) (oob-checker) (&+! *oob-checker* off) (call-parent-method this off))
+   (target-clr ()
+               (object)
+               (cond
+                 ((and *target* (-> this oob?))
+                  (set-vector! (-> *target* draw color-mult) 1.0 0.5 0.5 1.0)
+                  (set-vector! (-> *target* draw color-emissive) 0.5 0.0 0.0 1.0))
+                 ((and *target* (not (-> this oob?)))
+                  (set-vector! (-> *target* draw color-mult) 1.0 1.0 1.0 1.0)
+                  (set-vector! (-> *target* draw color-emissive) 0.0 0.0 0.0 1.0))))
+   (eye-trace? () (symbol) (dotimes (i 8) (if (not (-> this eye-trace-results i)) (return #f))) #t)
+   (eye-trace-below? ()
+                     (symbol)
+                     (dotimes (i MAX_EYE_TRACE_PROBES)
+                       (if (not (-> this eye-trace-probe-results i)) (return #f)))
+                     #t)
+   (oob? ()
+         (object)
+         (let ((below (check-below this (new-stack-vector0)))
+               (eye-trace (begin (check-eye-trace this (new-stack-vector0)) (eye-trace? this)))
+               (eye-trace-below (eye-trace-below? this)))
+           (format *stdcon* "below ~A eye-trace ~A eye-trace-below ~A~%" below eye-trace eye-trace-below)
+           (and *target*
+                (level-get-target-inside *level*)
+                (or (and (not below) (and (not eye-trace) (not eye-trace-below)))
+                    (and (not below) (and eye-trace eye-trace-below))
+                    (and below (and (not eye-trace) (not eye-trace-below))))
+                ; (not (inside-bsp? (level-get-target-inside *level*)))
+                )))
+   (debug-draw-probe ((name string) (pos vector) (dir vector) (length float) (clr rgba))
+                     (object)
+                     (when (-> this settings debug-draw?)
+                       (when name
+                         (add-debug-text-sphere #t (bucket-id debug-no-zbuf1) pos 1.0 name clr))
+                       (add-debug-vector #t (bucket-id debug-no-zbuf1) pos dir length clr)))
+   (check-eye-trace ((vec vector))
+                    (object)
+                    (with-target (let* ((cquery (new 'stack-no-clear 'collide-query))
+                                        (eye-pos (vector<-cspace! (new-stack-vector0) (-> it node-list data 8)))
+                                        (trace-dir (vector-z-quaternion! (new-stack-vector0) (-> it control quat-for-control)))
+                                        (trace (vector-float*! (new-stack-vector0) trace-dir (-> this settings eye-trace-length)))
+                                        (clr (static-rgba #xff 0 0 #x80))
+                                        (eye-trace? #f))
+                                   (vector-copy! (-> cquery start-pos) eye-pos)
+                                   (vector-copy! (-> cquery move-dist) trace)
+                                   (set! (-> cquery radius) (meters 0.01))
+                                   (set! (-> cquery collide-with) (collide-spec backgnd obstacle hit-by-player-list hit-by-others-list pusher))
+                                   (set! (-> cquery ignore-process0) #f)
+                                   (set! (-> cquery ignore-process1) #f)
+                                   (set! (-> cquery ignore-pat) (new 'static 'pat-surface :noentity #x1 :nojak #x1 :probe #x1 :noendlessfall #x1 :board #x1))
+                                   (set! (-> cquery action-mask) (collide-action solid))
+                                   (dotimes (ii 8)
+                                     (let ((ang (* (the float ii) (degrees 45)) ; (if (not (logtest? ii 1)) (* (degrees 45) (the float (/ ii 2))) (* (degrees -45) (the float (/ ii 2))))
+                                                ))
+                                       (vector-rotate-y! (-> cquery move-dist) (-> cquery move-dist) ang)
+                                       (vector-rotate-y! trace-dir trace-dir ang)
+                                       (let ((probe (>= (fill-and-probe-using-line-sphere *collide-cache* cquery) 0.0)))
+                                         (cond
+                                           (probe
+                                            (set! clr (static-rgba 0 #xff 0 #x80))
+                                            (debug-draw-probe this
+                                                              "eye-trace"
+                                                              eye-pos
+                                                              trace-dir
+                                                              (* (the float MAX_EYE_TRACE_PROBES_PER_DIR) (-> this settings eye-trace-below-probe-dist))
+                                                              clr)
+                                            (vector-copy! vec (-> cquery best-other-tri intersect))
+                                            (true! (-> this eye-trace-results ii)))
+                                           (else
+                                            (debug-draw-probe this
+                                                              "eye-trace"
+                                                              eye-pos
+                                                              trace-dir
+                                                              (* (the float MAX_EYE_TRACE_PROBES_PER_DIR) (-> this settings eye-trace-below-probe-dist))
+                                                              clr)
+                                            (false! (-> this eye-trace-results ii)))))
+                                       ;; down traces
+                                       (if (> MAX_EYE_TRACE_PROBES 0)
+                                         (let* ((below-trace-pos (vector-copy! (new-stack-vector0) eye-pos)))
+                                           (dotimes (i MAX_EYE_TRACE_PROBES_PER_DIR)
+                                             (let ((p (vector-float*! (new-stack-vector0) trace-dir (* (the float (1+ i)) (-> this settings eye-trace-below-probe-dist)))))
+                                               (set! (-> this eye-trace-probe-results (+ i (* ii MAX_EYE_TRACE_PROBES_PER_DIR)))
+                                                     (check-below-eye this (vector+! (new-stack-vector0) p below-trace-pos) (string-format "eye-below-trace-~D" i))))))))))))
+   (check-below-eye ((pos vector) (name string))
+                    (symbol)
+                    (with-target (let ((cquery (new 'stack-no-clear 'collide-query))
+                                       (clr (static-rgba #xff 0 0 #x80)))
+                                   (vector-copy! (-> cquery start-pos) pos)
+                                   (set-vector! (-> cquery move-dist) 0.0 (- (-> this settings below-trace-height)) 0.0 1.0)
+                                   (set! (-> cquery radius) (meters 0.01))
+                                   (set! (-> cquery collide-with) (collide-spec backgnd water hit-by-others-list pusher))
+                                   (set! (-> cquery ignore-process0) #f)
+                                   (set! (-> cquery ignore-process1) #f)
+                                   (set! (-> cquery ignore-pat) (new 'static 'pat-surface :noentity #x1 :nojak #x1 :probe #x1 :noendlessfall #x1 :board #x1))
+                                   (set! (-> cquery action-mask) (collide-action solid))
+                                   (let ((probe (>= (fill-and-probe-using-line-sphere *collide-cache* cquery) 0.0)))
+                                     (cond
+                                       (probe
+                                        (set! clr (static-rgba 0 #xff 0 #x80))
+                                        (debug-draw-probe this
+                                                          name
+                                                          pos
+                                                          (vector-normalize! (vector-copy! (new-stack-vector0) (-> cquery move-dist)) 1.0)
+                                                          (-> this settings below-trace-height)
+                                                          clr)
+                                        ; (vector-copy! vec (-> cquery best-other-tri intersect))
+                                        #t)
+                                       (else
+                                        (debug-draw-probe this
+                                                          name
+                                                          pos
+                                                          (vector-normalize! (vector-copy! (new-stack-vector0) (-> cquery move-dist)) 1.0)
+                                                          (-> this settings below-trace-height)
+                                                          clr)
+                                        #f))))))
+   (check-below ((vec vector))
+                (symbol)
+                (with-target (let ((cquery (new 'stack-no-clear 'collide-query))
+                                   (clr (static-rgba #xff 0 0 #x80)))
+                               (vector-copy! (-> cquery start-pos) (-> it control trans))
+                               (set-vector! (-> cquery move-dist) 0.0 (- (-> this settings below-trace-height)) 0.0 1.0)
+                               (set! (-> cquery radius) (meters 0.01))
+                               (set! (-> cquery collide-with) (collide-spec backgnd water hit-by-others-list pusher))
+                               (set! (-> cquery ignore-process0) #f)
+                               (set! (-> cquery ignore-process1) #f)
+                               (set! (-> cquery ignore-pat) (new 'static 'pat-surface :noentity #x1 :nojak #x1 :probe #x1 :noendlessfall #x1 :board #x1))
+                               (set! (-> cquery action-mask) (collide-action solid))
+                               (let ((probe (>= (fill-and-probe-using-line-sphere *collide-cache* cquery) 0.0)))
+                                 (cond
+                                   (probe
+                                    (set! clr (static-rgba 0 #xff 0 #x80))
+                                    (debug-draw-probe this
+                                                      "below-trace"
+                                                      (-> cquery start-pos)
+                                                      (vector-normalize! (vector-copy! (new-stack-vector0) (-> cquery move-dist)) 1.0)
+                                                      (-> this settings below-trace-height)
+                                                      clr)
+                                    (vector-copy! vec (-> cquery best-other-tri intersect))
+                                    (format *stdcon*
+                                            "below-trace normal ~,2f ~,2f ~,2f~% angle ~R~%"
+                                            (-> cquery best-other-tri normal x)
+                                            (-> cquery best-other-tri normal y)
+                                            (-> cquery best-other-tri normal z)
+                                            (acos (vector-dot (-> cquery best-other-tri normal)
+                                                              (vector-negate! (new-stack-vector0) (vector-normalize! (vector-copy! (new-stack-vector0) (-> cquery move-dist)) 1.0)))))
+                                    (add-debug-outline-triangle #t
+                                                                (bucket-id debug-no-zbuf1)
+                                                                (-> cquery best-other-tri vertex 0)
+                                                                (-> cquery best-other-tri vertex 1)
+                                                                (-> cquery best-other-tri vertex 2)
+                                                                (static-rgba #xff #xff 0 #x80))
+                                    (add-debug-triangle-normal #t
+                                                               (bucket-id debug-no-zbuf1)
+                                                               (-> cquery best-other-tri vertex 0)
+                                                               (-> cquery best-other-tri vertex 1)
+                                                               (-> cquery best-other-tri vertex 2)
+                                                               (static-rgba #xff #xff 0 #x80))
+                                    #t)
+                                   (else
+                                    (debug-draw-probe this
+                                                      "below-trace"
+                                                      (-> cquery start-pos)
+                                                      (vector-normalize! (vector-copy! (new-stack-vector0) (-> cquery move-dist)) 1.0)
+                                                      (-> this settings below-trace-height)
+                                                      clr)
+                                    #f))))))
+   (print-text ()
+               (object)
+               (format *stdcon* "[#x~X] ~A~%" *oob-checker* *oob-checker*)
+               (format *stdcon* "oob-checker: ")
+               (cond
+                 (*target*
+                  (cond
+                    ((-> this oob?) (format *stdcon* "~%~3Loob? ~A~%~0L" (-> this oob?)))
+                    (else (format *stdcon* "~%~6Loob? ~A~%~0L" (-> this oob?))))
+                  (when (> MAX_EYE_TRACE_PROBES 0)
+                    (dotimes (i 8)
+                      (cond
+                        ((-> this eye-trace-results i) (format *stdcon* "~6Leye-trace: ~A~%~0L" (-> this eye-trace-results i)))
+                        (else (format *stdcon* "~3Leye-trace: #f~%~0L"))))
+                    (dotimes (i MAX_EYE_TRACE_PROBES)
+                      (cond
+                        ((-> this eye-trace-probe-results i) (format *stdcon* "~6Leye-trace-~D: ~A~%~0L" i (-> this eye-trace-probe-results i)))
+                        (else (format *stdcon* "~3Leye-trace-~D: #f~%~0L" i)))))
+                  (format *stdcon* "~`oob-checker-settings`I" (-> this settings)))
+                 (else (format *stdcon* "no target~%")))))
+  (:events
+   (oob-checker-event-handler (case message
+                                (('stop) (deactivate self)))))
+  (:state-handlers (:event oob-checker-event-handler))
+  (:virtual-states
+   (idle :trans
+         (behavior ()
+           (print-text self)
+           (target-clr self))
+         :code
+         (behavior ()
+           (loop
+             (set! (-> self oob?) (the symbol (oob? self)))
+             (suspend))))))
+
+(defun oob-checker-stop ()
+  (if *oob-checker* (deactivate *oob-checker*)))
+
+(defun oob-checker-start ()
+  (oob-checker-stop)
+  (process-spawn oob-checker))
+
+(oob-checker-start)
