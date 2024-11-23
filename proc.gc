@@ -19,7 +19,7 @@
 (defun proc-kill-all ()
   (iterate-process-tree *proc-pool* (proc-func (deactivate p)) *null-kernel-context*))
 
-(defun proc-kill-by-name ((name basic))
+(defun proc-kill-by-name ((name string))
   (aif (process-by-name name *proc-pool*) (deactivate it)))
 
 (defun-recursive inspect-proc-tree process-tree ((tree process-tree) (buf object) (level int) (mask int) (detail symbol))
