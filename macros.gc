@@ -12,14 +12,16 @@
 (defmacro time-remaining (s t)
   `(- ,s (/ (- (current-time) ,t) TICKS_PER_SECOND)))
 
-(defmacro spawn-proc (&key (type process) &key (run #t) &key (loop #t) &key (name #f) &key (stack 128) &key (mask (pause menu)) &rest body)
+(defmacro spawn-proc (&key (type process) &key (from *proc-dead-pool*) &key (to *proc-pool*) &key (run #t) &key (loop #t) &key (name #f) &key (stack 128) &key (mask (pause menu)) &rest body)
   `(#cond
     (,(not run))
     (#t
      (begin
-       (if ,name (kill-by-name ,name *active-pool*))
+       (if ,name (kill-by-name ,name ,to))
        (process-spawn-function ,type
          :name ,name
+         :from ,from
+         :to ,to
          (lambda :behavior ,type
            ()
            (stack-size-set! (-> self main-thread) ,stack)
@@ -114,15 +116,16 @@
 (defmacro or-enum (val type &rest elts)
   `(or ,@(apply (lambda (enum-val) `(= ,val (,type ,enum-val))) elts)))
 
-(defmacro #when-game (version &rest body)
-  `(#when (eq? *game-version* ,version)
+(defmacro #when-game (versions &rest body)
+  `(#when (or ,@(apply (lambda (version) `(eq? *game-version* ,version)) versions))
     ,@body))
 
-(#when (or (eq? *game-version* 'jak2) (eq? *game-version* 'jak3))
+(#when-game ('jak2 'jak3)
   (defmacro get-taskman (&key (as task-manager) &key (proc (the process #f)))
     `(the ,as (command-get-process '*task-manager* ,proc)))
-  (defmacro load-levels (levels)
-    (with-gensyms (loaded)
-      (set! loaded '())
-      `(dotimes (i (-> *level* length))
-        ()))))
+  ; (defmacro load-levels (levels)
+  ;   (with-gensyms (loaded)
+  ;     (set! loaded '())
+  ;     `(dotimes (i (-> *level* length))
+  ;       ())))
+  )

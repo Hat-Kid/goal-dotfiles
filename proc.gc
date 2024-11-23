@@ -1,8 +1,66 @@
+(defconstant MAX_PROC_COUNT 6)
+
+(defconstant MAX_HEAP_SIZE (* 24 1024))
+
+(define-perm *proc-dead-pool* dead-pool (new 'global 'dead-pool MAX_PROC_COUNT MAX_HEAP_SIZE "*proc-dead-pool*"))
+
+(define-perm *proc-pool* process-tree (new 'global 'process-tree "proc-pool"))
+
+(change-parent *proc-pool* *active-pool*)
+
+(process-mask-set! (-> *proc-pool* mask) pause menu progress process-tree)
+
+(#when-game ('jak2 'jak3)
+  (when (= (-> *proc-pool* clock) *kernel-clock*)
+    (set! (-> *proc-pool* clock) (-> *display* base-clock))
+    (#when-game ('jak3)
+      (+! (-> *display* base-clock ref-count) 1))))
+
+(defun proc-kill-all ()
+  (iterate-process-tree *proc-pool* (proc-func (deactivate p)) *null-kernel-context*))
+
+(defun proc-kill-by-name ((name basic))
+  (aif (process-by-name name *proc-pool*) (deactivate it)))
+
+(defun-recursive inspect-proc-tree process-tree ((tree process-tree) (buf object) (level int) (mask int) (detail symbol))
+  (dotimes (i level)
+    (if (zero? (logand mask 1)) (format buf "    ") (format buf "|   "))
+    (set! mask (shr mask 1)))
+  ;; print us
+  (cond
+    (detail
+     (format buf "__________________~%")
+     ;; this is here, but I removed it because it prints at the wrong indent and looks weird.
+     ;(format buf "~S~A~%" (if (zero? level) "" "+---") tree)
+     (protect (*print-column*) (set! *print-column* (the binteger (* level 4))) (inspect tree)))
+    (else (format buf "~S~A~%" (if (zero? level) "" "+---") tree)))
+  ;; print our children
+  (let ((child (-> tree child)))
+    (while child
+      (inspect-proc-tree (-> child)
+                         buf
+                         (+ level 1)
+                         (if (not (-> (-> child) brother)) mask (logior mask (ash 1 (+ 1 level))))
+                         detail)
+      (set! child (-> (-> child) brother))))
+  tree)
+
+(defmacro proc-list (&key (buf #t) &key (level 0) &key (mask 0) &key (detail #f))
+  `(inspect-proc-tree *proc-pool* ,buf ,level ,mask ,detail))
+
+(defun kill-proc-list ()
+  (proc-kill-by-name "proc-list"))
+
+(defun print-proc-list ()
+  (kill-proc-list)
+  (spawn-proc :name "proc-list"
+    (proc-list :buf *stdcon*)))
+
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; jak 1
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(#when-game 'jak1
+(#when-game ('jak1)
   (spawn-proc :name "dupe"
     :run #f
     (format *stdcon* "hint #x~X~%~A~%~A~%" *hint-semaphore* *hint-semaphore* (ppointer->process *hint-semaphore*)))
@@ -22,7 +80,7 @@
 ;; jak 2
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(#when-game 'jak2
+(#when-game ('jak2)
   (spawn-proc :name "carb-path"
     :run #f
     (awhen (the carb (process-by-ename "subrails-car1")) (debug-draw (-> it path))))
@@ -205,7 +263,32 @@
 ;; jak 3
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(#when-game 'jak3
+(#when-game ('jak3)
+  (spawn-proc :name "rand-vu-dbg"
+    :run #f
+    :loop #f
+    (let ((a 0)
+          (vu-range (lambda ((arg0 int) (arg1 int))
+                      (if (< arg0 arg1) (set! arg1 (+ arg1 1)) (set! arg0 (+ arg0 1)))
+                      (let ((r (rand-vu-float-range (the float arg0) (the float arg1))))
+                        (format 0 "rand-vu-float result ~f (arg0 ~f arg1 ~f)~%" r (the float arg0) (the float arg1))
+                        (if (< r 0.0) (set! r (+ -1.0 r)))
+                        (the int r)))))
+      (loop
+        (let ((vu (vu-range 5 5)))
+          (format 0 "rand-vu-int-range-exclude: got ~D (arg0 ~D arg1 ~D) iter ~D~%" vu 5 5 a)
+          (1+! a)
+          (when (!= vu 5)
+            (format 0 "rand-vu-int-range-exclude: got ~D [END]~%" vu)
+            (deactivate self)))
+        (suspend))))
+  (spawn-proc :name "repl%"
+    :run #f
+    :loop #f
+    (go-process *target* target-continue (get-continue-by-name *game-info* "title-credits")))
+  (spawn-proc :name "music-proc"
+    :run #f
+    (set-setting! 'music 'unused2 0.0 0))
   (spawn-proc :name "kleever-manipy"
     :loop #f
     :run #f
@@ -342,6 +425,15 @@
 ;; all
 ;;;;;;;;;;;;;;;;;;;;;;
 
+(spawn-proc :name "low-grav"
+  :run #f
+  (with-target (set! (-> it control dynam gravity y) (meters 10))))
+
+(spawn-proc :name "reset-tracking"
+  :run #t
+  :stack 256
+  (send-event *camera* 'reset-follow))
+
 (spawn-proc :name "draw-tris"
   :stack 512
   :mask (menu)
@@ -451,7 +543,7 @@
 ;; tfl
 ;;;;;;;;;;;;;;;;;;;;;;
 
-(#when-game 'jak1
+(#when-game ('jak1)
   (spawn-proc :name "cam-dbg"
     :run #f
     (awhen (the camera-slave (ppointer->process (-> *camera* slave 0)))
