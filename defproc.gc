@@ -5,12 +5,12 @@
 
 (defmacro definit (type bindings &rest body)
   "Defines an 'init-by-other' behavior for the given type."
-  `(defbehavior ,(string->symbol (fmt #f "{}-init-by-other" type)) ,type ,bindings
+  `(defbehavior ,(string->symbol-format "{}-init-by-other" type) ,type ,bindings
     ,@body))
 
-(defmacro defevent (name process-type &rest body)
+(defmacro defevent (type &rest body)
   "Define an event handler for a process."
-  `(defbehavior ,name ,process-type ((proc process) (argc int) (message symbol) (block event-message-block))
+  `(defbehavior ,(string->symbol-format "{}-event-handler" type) ,type ((proc process) (argc int) (message symbol) (block event-message-block))
     ,@body))
 
 ;; original 'defclass' macro from https://github.com/open-goal/jak-project/pull/2126

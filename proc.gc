@@ -2,6 +2,8 @@
 
 (defconstant MAX_HEAP_SIZE (* 24 1024))
 
+(defconstant PRINT_PROC_LIST #t)
+
 (define-perm *proc-dead-pool* dead-pool (new 'global 'dead-pool MAX_PROC_COUNT MAX_HEAP_SIZE "*proc-dead-pool*"))
 
 (define-perm *proc-pool* process-tree (new 'global 'process-tree "proc-pool"))
@@ -55,6 +57,8 @@
   (kill-proc-list)
   (spawn-proc :name "proc-list"
     (proc-list :buf *stdcon*)))
+
+(if PRINT_PROC_LIST (print-proc-list))
 
 ;;;;;;;;;;;;;;;;;;;;;;
 ;; jak 1
